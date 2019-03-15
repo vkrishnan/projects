@@ -1,0 +1,38 @@
+*** Settings ***
+Documentation   SPP Offline interactive install through iso image
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v IMAGE_LOCATION:<SPP-Image-Location> spp_offline_through_iso.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _admin_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _admin123_ |
+...             | IMAGE_LOCATION    | Required | Image location of the SPP source media (must be in HTTP format) |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/config.py
+
+
+*** Test Cases ***
+Send offline script to ilo blob
+    [Documentation]     Sending selenium script to ilo blob using locfg
+    [Setup]             Run Keywords    Ilo Connect     ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}
+    ...                 AND             Mount SPP Image
+
+    ${dict} =               Create Dictionary
+    ...                     {{iloip}} = ${ILO_IP}
+    ${RG_ROOT} =            Get RG Root
+    ${temp_file} =          Replace String In File      ${RG_ROOT}\\${OFFLINE_SCRIPT_ISO}   ${dict}
+    : FOR                   ${index}                    IN RANGE                0           3
+    \                       ${status} =                 Run Keyword And Return Status       Send Script To Blob     ${temp_file}
+    \                       Run Keyword If              '${status}' == 'True'   Exit For Loop
+    \                       Run Keyword If              '${status}' != 'True'   Sleep       60
+    Run Keyword If          '${status}' != 'True'       Fail                    Error: Selenium script not sent to ilo blob
+    Ilo Set One Time Boot   cdrom
+    Ilo Cold Boot Server
+    Sleep                   250
+    Ilo Set One Time Boot   hdd
+
+    [Teardown]      Remove File     ${temp_file}
+

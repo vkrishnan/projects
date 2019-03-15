@@ -1,0 +1,52 @@
+*** Settings ***
+Documentation   Dumping offline selenium script to ilo blob
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> spp_offline.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+
+...     = prerequisites =
+...     | 1.                    Install strawberry-perl-5.20.2.1-32bit on RG server |
+...     | 2.                    Install Socket6-0.25 on perl |
+...     | For Gen8 Servers      |
+...     | 3. Modify syslinux.cfg file MENU LABEL from " Automatic " to " Interactive ", syslinux.cfg file is located in <mounted_usb_spp_folder>/syslinux.cfg |
+...     | 4. Modify syslinux.cfg file MENU LABEL from " Interactive " to " Automatic " |
+...     | 5. Remove " AUTOREBOOTONSUCCESS=yes " from syslinux.cfg   and save |
+...     | 6. For more details Refer C:\\dev\\spp\\tests\\spp\\resource\\spp_offline\\syslinux.cfg |
+...     | For Gen9 Servers      |
+...     | 7. Modify grub.cfg file menuentry from " Automatic " to " Interactive " , grub.cfg file is located in <mounted_usb_spp_folder>/efi/boot/grub.cfg |
+...     | 8. Modify grub.cfg file menuentry from " Interactive " to " Automatic " |
+...     | 9. Remove " AUTOREBOOTONSUCCESS=yes " from grub.cfg and save. |
+...     | 10. For more details Refer C:\\dev\\spp\\tests\\spp\\resource\\spp_offline\\grub.cfg |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/config.py
+
+
+*** Test Cases ***
+Send offline script to ilo blob
+    [Documentation]     Sending selenium script to ilo blob using locfg
+
+    Ilo Connect     ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}
+
+    ${dict} =               Create Dictionary
+    ...                     {{iloip}} = ${ILO_IP}
+    ${RG_ROOT} =            Get RG Root
+    ${temp_file} =          Replace String In File      ${RG_ROOT}\\${OFFLINE_SCRIPT}   ${dict}
+    : FOR                   ${index}                    IN RANGE                0       6
+    \                       ${status} =                 Run Keyword And Return Status   Send Script To Blob     ${temp_file}
+    \                       Run Keyword If              '${status}' == 'True'   Exit For Loop
+    \                       Run Keyword If              '${status}' != 'True'   Sleep   60
+    Run Keyword If          '${status}' != 'True'       Fail                    Error: Selenium script not sent to ilo blob
+    Sleep                   10s
+    Ilo Set One Time Boot   usb
+    Ilo Cold Boot Server
+    Sleep                   250
+    Ilo Set One Time Boot   hdd
+
+    [Teardown]      Remove File     ${temp_file}
+

@@ -1,0 +1,169 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows to Windows Remote Node
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v REMOTE_NODE_IP:<Remote-Node-IP> -v REMOTE_NODE_USERNAME:<Remote-Node-Username> -v REMOTE_NODE_PASSWORD:<Remote-Node-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Spp-Mount-Type> win_to_win_remote.txt
+...             = Variables =
+...             | ILO_IP                    | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME              | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD              | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP                 | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME           | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD           | Optional | System password of the SUT; default _Compaq123_ |
+...             | REMOTE_NODE_IP            | Required | System IP address of the target |
+...             | REMOTE_NODE_USERNAME      | Optional | System username of the target; default _Administrator_ |
+...             | REMOTE_NODE_PASSWORD      | Optional | System password of the target; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH           | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE            | Optional | Virtual, DVD, USB; default _Virtual_ |
+...             = Prerequisites =
+...             Requires PSEXEC to be available and added in the environment variables.
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     ${REMOTE_NODE_IP}
+
+
+*** Test Cases ***
+Install SPP (Silent) on Windows Remote Node to Windows Target
+    [Documentation]     Silent HPSUM installation with no options on Windows remote node to Windows target
+    [Tags]              SPP Install
+
+    Initialze Test Case Variables
+
+    Ilo Connect             ${ILO_IP}       ${ILO_USERNAME}         ${ILO_PASSWORD}
+    Open Connection WMI     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+
+    # Enable AutoLogOn and Reboot Server
+    Enable AutoLogOn
+    Unmount And Reboot Server
+
+    Get HPSUM Version
+
+    # Clean logs on Host and remote node
+    Clean Logs Server
+    Open Connection WMI             ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    SppLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect & Parse Deploy Preview Report first time
+    ${command} =            Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...                     ${REMOTE_NODE_IP}
+    ...                     ${REMOTE_NODE_USERNAME}
+    ...                     ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report   ${command}          First_Run
+    Parse Deploy Preview Report                 First_Run
+
+    # Clean logs on Host and remote node
+    Clean Logs Server
+    SppLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Clean Logs Server
+    SppLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Execute HPSUM First Time
+    ${command} =                Construct Command   ${COMMAND_HPSUM_WINDOWS_REMOTE_NODE}    %s      ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Execute HPSUM And Get Log   ${command}          win_to_win_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    OperatingSystem.Move File           ${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}     ${RG_LOG_PATH}\\1_${HPSUM_DETAIL_LOG}
+    OperatingSystem.Move File           ${RG_LOG_PATH}\\${HPSUM_LOG}            ${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    Analyze HPSUM Log                   first run
+    Execute Gatherlogs And Get Log      first run
+
+    First Dependency Check
+
+    # Reboot remote node.
+    SppLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Reboot Remote Node
+    Wait Until Power Cycle          ${REMOTE_NODE_IP}
+    SppLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect Deploy Preview Report second time
+    ${command} =            Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...                     ${REMOTE_NODE_IP}
+    ...                     ${REMOTE_NODE_USERNAME}
+    ...                     ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report   ${command}          Second_Run
+
+    # Execute HPSUM Second Time
+    ${command} =                Construct Command   ${COMMAND_HPSUM_WINDOWS_REMOTE_NODE}    %s      ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Execute HPSUM And Get Log   ${command}          win_to_win_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xm
+    OperatingSystem.Move File           ${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}     ${RG_LOG_PATH}\\2_${HPSUM_DETAIL_LOG}
+    OperatingSystem.Move File           ${RG_LOG_PATH}\\${HPSUM_LOG}            ${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    Analyze HPSUM Log                   second run
+    Execute Gatherlogs And Get Log      second run
+
+    # Combine the hpsum_details_log and copy it back to SUT
+    # This step is performed because the files get overwritten
+    Combine Files And Copy
+
+    # Second dependency check
+    Second Dependency Check And Move File
+
+    # Reboot remote node.
+    SppLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Reboot Remote Node
+    Wait Until Power Cycle          ${REMOTE_NODE_IP}
+    SppLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect & Parse Deploy Preview Report third time
+    Run Keyword And Continue On Failure             Move Log Files To Temp Directory
+    SppLibrary.Switch Connection                    ${REMOTE_NODE_IP}
+    Run Keyword And Continue On Failure             Move Log Files To Temp Directory
+    SppLibrary.Switch Connection                    ${SYSTEM_IP}
+    SppLibrary.Start Command    cmd.exe /c del /S /Q ${LOGS_WINDOWS_REPORT}\\${DEPLOY_PREVIEW_REPORT}*
+    ${command} =                Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...                         ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report       ${command}          Third_Run
+    Parse Deploy Preview Report                     Third_Run
+    [Teardown]                  Testcase Cleanup
+
+
+*** Keywords ***
+First Dependency Check
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      1
+    Return From Keyword If                          None == ${check}
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     WARN
+
+Second Dependency Check And Move File
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      3
+    Run Keyword If          None != ${check}        Run Keywords            Move Log Files To Temp Directory
+    ...                     AND                     SppLibrary.Switch Connection            ${REMOTE_NODE_IP}
+    ...                     AND                     Run Keyword And Continue On Failure     Move Log Files To Temp Directory
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0               ${len}
+    \                       ${services}             Get From Dictionary     ${check}        ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     ERROR
+    Run Keyword If          None != ${check}        Fail                    Failed Due to dependency in component(s)
+
+Combine Files And Copy
+    Run Keyword And Continue On Failure                     Combine Files   ${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}
+    ...                     ${RG_LOG_PATH}\\1_${HPSUM_DETAIL_LOG}
+    ...                     ${RG_LOG_PATH}\\2_${HPSUM_DETAIL_LOG}
+    Run Keyword And Continue On Failure                     Combine Files   ${RG_LOG_PATH}\\${HPSUM_LOG}
+    ...                     ${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    ...                     ${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    SppLibrary.Put File     ${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}             ${LOGS_WINDOWS}\\${SUT_LOG_LOCATION}
+    SppLibrary.Put File     ${RG_LOG_PATH}\\${HPSUM_LOG}    ${LOGS_WINDOWS}\\${SUT_LOG_LOCATION}
+

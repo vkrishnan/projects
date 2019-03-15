@@ -1,0 +1,156 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Linux Using Local CLI Parameters
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> lin_local_cli.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH   | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE    | Optional | Virtual, DVD, USB; default _Virtual_ |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+${REPORT_DIR}           /reports
+${LOG_NAME}             /USERDIR
+@{reports}              Inventory_Report    FailedDependency_Report
+                        ...                 Combined_Report
+                        ...                 Firmware_Report     Installed_Report
+
+
+*** Test Cases ***
+Local CLI SWITCH
+    [Documentation]     Silent HPSUM installation with local CLI parameters
+    [Tags]              Setup server
+    Initialze Test Case Variables
+    Unix Server Setup
+    Get HPSUM Version
+
+SOFTWARE ONLY FORCE BUNDLE WITH NO MGMT
+    [Documentation]                 Silent HPSUM installation with force bundle software only with no mgmt options
+    [Tags]                          Force Bundle Software only
+    Initialize Test Case Variables For CLI
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_LINUX_SOFTWARE_ONLY}        lin_livelog.py
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Unmount SPP Image
+    Reboot Server
+
+FORCE SOFTWARE ONLY
+    [Documentation]                 Silent HPSUM installation with force software only options
+    [Tags]                          SPP Force Software Only Install
+    Initialize Test Case Variables For CLI
+    Unix Server Setup
+    Mount SPP Image
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_LINUX_FORCE_SOFTWARE_ONLY}      lin_livelog.py
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}          ${RG_LOG_PATH}
+
+FORCE ROM ONLY
+    [Documentation]                 Silent HPSUM installation with force ROM only
+    [Tags]                          SPP Force Rom Only
+    Initialize Test Case Variables For CLI
+    Unix Server Setup
+    Mount SPP Image
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_LINUX_FORCE_ROM_ONLY}       lin_livelog.py
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Unmount SPP Image
+    Reboot Server
+
+Preview Report Checks
+    [Documentation]     Silent HPSUM Preview Report Check
+    [Tags]              SPP Preview Reports Check
+    Initialize Test Case Variables For CLI
+    Unix Server Setup
+    Mount SPP Image
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    SSHLibrary.Execute Command              rm -rf ${REPORT_DIR}
+    ${mount_point} =    UnixLibrary.Get SPP Mount Point
+    ${hpsum_dir} =      Catenate            SEPARATOR=      ${mount_point}
+    ...                 ${HPSUM_DIR_LINUX}
+    ${command}=         Construct Command   ${HPSUM_INVENTORY_FIRMWARE_DEPENDENCY_INSTALLED_COMBINED_REPORT}
+    UnixLibrary.SSH Run Command             ${command}      ${hpsum_dir}    ${HPSUM_TIMEOUT}
+    Get Hpsum Reports
+    Unmount SPP Image
+    Reboot Server
+
+FORCE DRYRUN
+    [Documentation]         Silent HPSUM installation with force dryrun options
+    [Tags]                  SPP force dryrun Install
+    Initialize Test Case Variables For CLI
+    Unix Server Setup
+    Mount SPP Image
+    Kill Process Name       ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    Ilo Set One Time Boot   HDD
+    SSHLibrary.Execute Command                          rm -rf ${LOG_NAME}
+    ${Command_Output} =     Execute HPSUM For Dry run   ${COMMAND_HPSUM_LINUX_FORCE_DRYRUN}                 lin_livelog.py
+    Sleep                   30s
+    ${status} =             Run Keyword And Return Status                       Wait Until Power Cycle      ${SYSTEM_IP}
+    Run Keyword If          "${status}" == "False"      Log
+    ...                     ${HPSUM_NAME} Deployment Error Found, Hence Server Will Not Reboot.             WARN
+    Open Connection SSH     ${SYSTEM_IP}                ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    UnixLibrary.Collect HPSUM Logs                      @{LOG_FILES_USERDIR_LINUX}
+    Execute Gatherlogs And Get Log
+    Run Keyword If          '''Checking_Reboot_Message''' not in '''${Command_Output}''' and '${status}' == 'True'      Log
+    ...                     "RebootMessage parameter not working"
+    ...                     WARN
+    [Teardown]              Testcase Cleanup
+
+
+*** Keywords ***
+Initialize Test Case Variables For CLI
+    OperatingSystem.Create Directory    ${RG_LOG_PATH}/${TEST NAME}
+    OperatingSystem.Directory Should Exist                  ${RG_LOG_PATH}/${TEST NAME}
+    ${RG_LOG_PATH} =                    Normalize Path      ${RG_LOG_PATH}/${TEST NAME}
+    Set Test Variable                   ${RG_LOG_PATH}
+
+Execute HPSUM For Dry run   [Arguments]         ${command_template}         ${live_log}
+    ${rg_root} =            Get RG Root
+    ${mount_point} =        UnixLibrary.Get SPP Mount Point
+    ${hpsum_dir} =          Catenate            SEPARATOR=                  ${mount_point}      ${HPSUM_DIR_LINUX}
+    ${command}=             Construct Command   ${command_template}
+    ${handle} =             Start Process       python
+    ...                     ${rg_root}\\tools\\${live_log}
+    ...                     -SI                 ${SYSTEM_IP}                -SU                 ${SYSTEM_USERNAME}
+    ...                     -SP                 ${SYSTEM_PASSWORD}          -LL                 ${SUT_LOG_LOCATION}
+    ...                     -RU                 ${REMOTE_NODE_USERNAME}     -RP                 ${REMOTE_NODE_PASSWORD}
+    ...                     stderr=stderr.txt   stdout=stdout.txt           alias=myproc
+    ${output} =             SSH Run Command     ${command}                  ${hpsum_dir}        ${HPSUM_TIMEOUT}
+    Terminate Process       myproc              kill=true
+    [Return]                ${output}
+
+Get Hpsum Reports
+    :FOR    ${var}              IN          @{reports}
+    \       Sleep               3s
+    \       SSHLibrary.Execute Command      mv ${REPORT_DIR}/${HPSUM_NAME}_${var}*/*.html ${REPORT_DIR}
+    \       Run Keyword And Ignore Error    SSHLibrary.Get File                 ${REPORT_DIR}/${HPSUM_NAME}_${var}_*.html   .\\
+    \       Run Keyword And Ignore Error    OperatingSystem.Move File           .\\${HPSUM_NAME}_${var}_*.html
+    \       ...                 ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Sleep               3s
+    \       ${status} =         Run Keyword And Return Status
+    \       ...                 OperatingSystem.File Should Exist
+    \       ...                 ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Run Keyword If      '${status}' == 'False'
+    \       ...                 LOG         ${HPSUM_NAME}_${var} Not Found      WARN
+

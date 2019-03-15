@@ -1,0 +1,163 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows Using Local CLI Parameters
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> -v SIGNATURE_BYPASS:<Signature-bypass> win_local_cli.txt
+...             = Variables =
+...             | ILO_IP                | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME          | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD          | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP             | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME       | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD       | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH       | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE        | Optional | Virtual, CDDVDW, USB; default _Virtual_ |
+...             | SIGNATURE_BYPASS      | Optional | Bypass pop-up and install components if set to true; default _True_ |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+${REPORT_DIR}           C:\\reports
+${LOG_NAME}             C:\\USERDIR
+@{reports}              Inventory_Report    FailedDependency_Report
+                        ...                 Combined_Report
+                        ...                 Firmware_Report     Installed_Report
+
+
+*** Test Cases ***
+Local CLI SWITCH
+    [Documentation]     Silent HPSUM installation with local CLI parameters
+    [Tags]              Setup server
+    Setup Server
+    Mount SPP Image
+    Get HPSUM Version
+
+SOFTWARE ONLY FORCE BUNDLE WITH NO MGMT
+    [Documentation]                 Silent HPSUM installation with force bundle software only with no mgmt options
+    [Tags]                          Force Bundle Software only
+    Initialze Test Case Variables For CLI
+    Ilo Connect                     ${ILO_IP}       ${ILO_USERNAME}             ${ILO_PASSWORD}
+    Open Connection WMI             ${SYSTEM_IP}    ${SYSTEM_USERNAME}          ${SYSTEM_PASSWORD}
+    Clean Logs Server
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_WINDOWS_SOFTWARE_ONLY}      win_livelog.py
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  software only force bundle with no mgmt
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Unmount And Reboot Server
+
+FORCE SOFTWARE ONLY
+    [Documentation]                 Silent HPSUM installation with force software only options
+    [Tags]                          SPP Force Software Only Install
+    Initialze Test Case Variables For CLI
+    Ilo Connect                     ${ILO_IP}       ${ILO_USERNAME}                 ${ILO_PASSWORD}
+    Open Connection WMI             ${SYSTEM_IP}    ${SYSTEM_USERNAME}              ${SYSTEM_PASSWORD}
+    Clean Logs Server
+    Mount SPP Image
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_WINDOWS_FORCE_SOFTWARE_ONLY}    win_livelog.py
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  force software only
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}          ${RG_LOG_PATH}
+
+FORCE ROM ONLY WITHOUT ILO
+    [Documentation]                 Silent HPSUM installation with force rom only without ilo options
+    [Tags]                          SPP Force Rom Only Without Ilo Install
+    Initialze Test Case Variables For CLI
+    Ilo Connect                     ${ILO_IP}       ${ILO_USERNAME}             ${ILO_PASSWORD}
+    Open Connection WMI             ${SYSTEM_IP}    ${SYSTEM_USERNAME}          ${SYSTEM_PASSWORD}
+    Clean Logs Server
+    Mount SPP Image
+    Execute HPSUM And Get Log       ${COMMAND_HPSUM_WINDOWS_FORCE_ROM_ONLY}     win_livelog.py
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  force rom only without ilo
+    Run Keyword And Ignore Error    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Unmount And Reboot Server
+
+Priview Repost Checks
+    [Documentation]             Silent HPSUM Priview Report Check
+    [Tags]                      SPP Priview Reports Check
+    Initialze Test Case Variables For CLI
+    Ilo Connect                 ${ILO_IP}                       ${ILO_USERNAME}                     ${ILO_PASSWORD}
+    Open Connection WMI         ${SYSTEM_IP}                    ${SYSTEM_USERNAME}                  ${SYSTEM_PASSWORD}
+    Clean Logs Server
+    Mount SPP Image
+    ${mounted_drive} =          WinLibrary.Get SPP Mount Point
+    ${command}=                 Construct Command               ${HPSUM_INVENTORY_FIRMWARE_DEPENDENCY_INSTALLED_COMBINED_REPORT}
+    ...                         ${mounted_drive}
+    Execute Command Psexec      ${command}                      ${HPSUM_TIMEOUT}
+    ${status} =                 Run Keyword And Return Status   SppLibrary.Folder Should Exist      ${REPORT_DIR}
+    Run Keyword If              '${status}' == 'False'          Log
+    ...                         "Report Dir parameter not working"
+    ...                         WARN
+    Run Keyword If              '${status}' == 'True'           Get Hpsum Reports
+    Unmount And Reboot Server
+
+FORCE DRYRUN
+    [Documentation]             Silent HPSUM installation with force dryrun options
+    [Tags]                      SPP force dryrun Install
+    Initialze Test Case Variables For CLI
+    Ilo Connect                 ${ILO_IP}                   ${ILO_USERNAME}         ${ILO_PASSWORD}
+    Open Connection WMI         ${SYSTEM_IP}                ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Clean Logs Server
+    SppLibrary.Remove Dir       C:\\USERDIR
+    Mount SPP Image
+    Ilo Set One Time Boot       HDD
+    Execute HPSUM For Dry run   ${COMMAND_HPSUM_WINDOWS_FORCE_DRYRUN}               win_livelog.py
+    Sleep                       30s
+    Wait Until Power Cycle      ${SYSTEM_IP}
+    ${status} =                 Run Keyword And Return Status                       SppLibrary.Folder Should Exist
+    ...                         C:\\USERDIR
+    Run Keyword If              '${status}' == 'False'      Log                     "LogFileName parameter not working"
+    ...                         WARN
+    Run Keyword If              '${status}' == 'True'       WinLibrary.Collect HPSUM Logs
+    ...                         @{LOG_FILES_USERDIR_WINDOWS}
+    Execute Gatherlogs And Get Log                          force dryrun
+    ${event_logs} =             Get Event Logs              System                  Information
+    Run Keyword And Continue On Failure                     Generate Event Logs     System      ${event_logs}
+    ...                         ${RG_LOG_PATH}
+    ${message_check}            Reboot Message Check        ${RG_LOG_PATH}\\System.html
+    Run Keyword If              ${message_check} == 0       Log                     "RebootMessage parameter not working"
+    ...                         WARN
+    [Teardown]                  Testcase Cleanup
+
+
+*** Keywords ***
+Initialze Test Case Variables For CLI
+    OperatingSystem.Create Directory    ${RG_LOG_PATH}/${TEST NAME}
+    OperatingSystem.Directory Should Exist                  ${RG_LOG_PATH}/${TEST NAME}
+    ${RG_LOG_PATH} =                    Normalize Path      ${RG_LOG_PATH}/${TEST NAME}
+    Set Test Variable                   ${RG_LOG_PATH}
+
+Execute HPSUM For Dry run       [Arguments]         ${command_template}         ${live_log}
+    ${rg_root} =                Get RG Root
+    ${mounted_drive} =          WinLibrary.Get SPP Mount Point
+    ${handle} =                 Start Process       python
+    ...                         ${rg_root}\\tools\\${live_log}
+    ...                         -SI                 ${SYSTEM_IP}                -SU     ${SYSTEM_USERNAME}
+    ...                         -SP                 ${SYSTEM_PASSWORD}          -LL     ${SUT_LOG_LOCATION}
+    ...                         -RU                 ${REMOTE_NODE_USERNAME}     -RP     ${REMOTE_NODE_PASSWORD}
+    ...                         stderr=stderr.txt   stdout=stdout.txt           alias=myproc
+    ${command}=                 Construct Command   ${command_template}         ${mounted_drive}
+    SppLibrary.Execute Command                      ${command}                  ${HPSUM_TIMEOUT}
+    ${result} =                 Wait For Process    myproc
+    Process Should Be Stopped   myproc
+
+Get Hpsum Reports
+    :FOR    ${var}                  IN      @{reports}
+    \       Sleep                   3s
+    \       SppLibrary.Get File     ${REPORT_DIR}\\${HPSUM_NAME}_${var}*\\*.html    .\\
+    \       Run Keyword And Ignore Error    OperatingSystem.Move File               .\\${HPSUM_NAME}_${var}_*.html
+    \       ...                     ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Sleep                   3s
+    \       ${status} =             Run Keyword And Return Status
+    \       ...                     OperatingSystem.File Should Exist
+    \       ...                     ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Run Keyword If          '${status}' == 'False'
+    \       ...                     LOG     ${HPSUM_NAME}_${var} Not Found          WARN
+

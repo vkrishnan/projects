@@ -1,0 +1,52 @@
+*** Settings ***
+Documentation   Linux Post-install Verification for VMware Remote Node
+...             = Usage =
+...             pybot -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password>    -v REMOTE_NODE_IP:<Remote-IP>
+...             lin_piv_remote_vmware.txt
+...             = Variables =
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             | REMOTE_NODE_IP    | Required | Remote IP address of the SUT |
+...             = Prerequisites =
+...             SPP should be installed on SUT using automation remote scripts.
+...             Mozilla Firefox must be installed on the RoboGalaxy server running the test suite.
+
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Resource    SppLibrary/resource/spp_piv_vmware.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Test Cases ***
+Linux PIV for VMware
+    [Documentation]     Post-install verification on Linux for VMware remote node
+    [Tags]              PIV
+
+    Open Connection SSH     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+
+    Check HPSUM Version
+    Run Keyword And Continue On Failure     Verify HPSUM Log Files Existence On Linux For Vmware Remote Node
+    Run Keyword And Continue On Failure     Check Log File Sizes On Linux For Vmware Remote Node
+    Run Keyword And Continue On Failure     Component Status Post Installation On Linux For Vmware Remote Node
+
+
+*** Keywords ***
+Check HPSUM Version
+    [Documentation]     Author: Sriram Chowdary
+    ...
+    ...                 Check hpsum_log.txt file and return existence status.
+    ...
+    ...                 Import config file based on hpsum_log.txt file existence status.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Check HPSUM Version |
+    ${STATUS}           Run Keyword And Return Status               SSHLibrary.File Should Exist
+    ...                 /tmp/temp/hpsum_log.txt
+    Run Keyword If      ${STATUS} == False      Import Variables    SppLibrary/config/hpsum_config_8.py
+    ...                 ELSE IF                 ${STATUS} == True   Import Variables
+    ...                 SppLibrary/config/hpsum_config_7.py
+    ...                 ELSE                    Run Keyword If      ${HPSUM_VERSION} != 8 and ${HPSUM_VERSION} != 7
+    ...                 Fail                    " Didn't find HPSUM version "
+

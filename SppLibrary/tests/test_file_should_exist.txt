@@ -1,0 +1,13 @@
+*** Settings ***
+Library    SppLibrary.core.WindowsRemoteLibrary
+
+*** Variables ***
+${HOSTNAME1}    172.20.56.183
+${HOSTNAME2}    172.20.56.73
+${USERNAME}    Administrator
+${PASSWORD}    Compaq123
+
+*** Test Cases ***
+Test File Should Exist
+	Open Connection    ${HOSTNAME1}    ${USERNAME}    ${PASSWORD}
+	File Should Exist    C:\\vinay.txt

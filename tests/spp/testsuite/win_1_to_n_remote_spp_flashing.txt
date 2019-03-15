@@ -1,0 +1,470 @@
+*** Settings ***
+Documentation   Automatic SPP Install from user input
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> win_1_to_n_remote_spp_flashing.txt
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | HTTP_IMAGE_PATH   | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | MOUNT_TYPE        | Optional | Virtual, CDDVDW, USB; default _Virtual_ |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+
+Library     String
+Library     SppLibrary
+Variables   SppLibrary/config/variables.py
+Variables   SppLibrary/config/hpsum_config_8.py
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+${RG_LOG_PATH}          ${EMPTY}
+${HOST_INFO}            ${EMPTY}
+
+
+*** Test Cases ***
+Install SPP (Silent) on SUTs from Windows Server
+    [Documentation]     SPP installation on multiple systems(1 to N)
+    [Tags]              SPP Install
+
+    Setup Main Server
+    WinLibrary.Get HPSUM Version
+    Copy Input Files
+    Setup Remote Servers    ${ACTUAL_HOST_INFO_1}
+    Clean Logs On All Servers
+    Kill HPSUM On Remote Servers
+
+    # Collect Deploy Preview Report first time
+    WinLibrary.Deploy Preview Report    ${HPSUM_REPORT_COMMAND_1}   First_Run
+    Parse Deploy Preview Report         First_Run                   ${1}
+
+    Clean Logs On All Servers
+
+    # Execute HPSUM First Time
+    Execute HPSUM And Get All Logs      ${HPSUM_EXECUTE_COMMAND_1}
+    Analyze All HPSUM Logs              first run
+    WinLibrary.Execute Gatherlogs And Get Log
+    First Dependency Check              ${HPSUM_LOG}
+
+    Reboot And Reset Remote Servers
+    Run Keyword And Ignore Error    Move Remote Log Files To Temp Directory
+    SppLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect Deploy Preview Report second time
+    WinLibrary.Deploy Preview Report    ${HPSUM_REPORT_COMMAND_1}   Second_Run
+
+    #Check if any hosts available for 2nd installation and pass execution if not
+    ${SecondRunHosts_length} =      Get Length      ${ACTUAL_HOST_INFO_2}
+    Pass Execution IF   '${SecondRunHosts_length}' == '0'
+    ...                 No nodes availble for further auto installation. Exiting
+
+    Setup Remote Servers    ${ACTUAL_HOST_INFO_2}
+
+    # Execute HPSUM Second Time and Analyze logs
+    Execute HPSUM And Get All Logs          ${HPSUM_EXECUTE_COMMAND_2}
+    Analyze All HPSUM Logs                  second run
+    WinLibrary.Execute Gatherlogs And Get Log
+    Second Dependency Check And Move File   ${HPSUM_LOG}
+
+    Reboot And Reset Remote Servers
+    Move All Log Files To Temp Directory
+
+    # Collect & Parse Deploy Preview Report third time
+    SppLibrary.Start Command            cmd.exe /c del /S /Q ${LOGS_WINDOWS_REPORT}\\${DEPLOY_PREVIEW_REPORT}*
+    WinLibrary.Deploy Preview Report    ${HPSUM_REPORT_COMMAND_2}   Third_Run
+    Parse Deploy Preview Report         Third_Run                   ${3}
+
+    [Teardown]      Run Keywords
+    ...             Run Keyword And Ignore Error    SppLibrary.Start Command
+    ...             cmd.exe /c del /S /Q c:\\hpsum_execute*.ini c:\\hpsum_report*.ini   AND
+    ...             WinLibrary.Testcase Cleanup
+
+
+*** Keywords ***
+Setup Main Server
+    [Documentation]             Setup server for tests.
+    ...                         Performs the following actions.
+    ...                         Connect to ILO and server
+    ...                         Enable auto logon, disable UAC and reboot server.
+    Initialze Test Case Variables
+    Create Input Files And Get Remote Server Details
+    Ilo Connect                 ${ILO_IP}       ${ILO_USERNAME}         ${ILO_PASSWORD}
+    Open Connection WMI         ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    SppLibrary.Remove Dir       ${SUT_TEMP_DIR_WINDOWS}
+    Sleep                       2s
+    SppLibrary.Start Command    cmd.exe /c mkdir ${SUT_TEMP_DIR_WINDOWS}
+    #Enable AutoLogOn & Disable UAC on SUT and Reboot
+    Enable AutoLogOn
+    Disable UAC
+    Unmount And Reboot Server
+
+Unmount And Reboot Server
+    [Documentation]     Unmount SPP image and reboot server.
+    WinLibrary.Unmount SPP Image
+    WinLibrary.Reboot Server
+
+Create Input Files And Get Remote Server Details
+    [Documentation]             Parse and gather information of required systems and create the input file
+    ${rg_root}=                 SppLibrary.Get RG Root
+    ${ACTUAL_HOST_INFO_1}=      SppLibrary.Parse CSV Input File     ${rg_root}      ${1}
+    ${ACTUAL_HOST_INFO_2}=      SppLibrary.Parse CSV Input File     ${rg_root}      ${2}
+    Set Suite Variable          ${ACTUAL_HOST_INFO_1}
+    Set Suite Variable          ${ACTUAL_HOST_INFO_2}
+    ${LOG_DIRECTORIES}          Create Dictionary
+    Set Suite Variable          ${LOG_DIRECTORIES}
+
+Copy Input Files
+    [Documentation]                 Copy the generated input files on to the SUT
+    ${rg_root}=                     SppLibrary.Get RG Root
+    SppLibrary.Put File             ${rg_root}\\tools\\hpsum_execute_1.ini      C:\\
+    SppLibrary.Put File             ${rg_root}\\tools\\hpsum_report_1.ini       C:\\
+    SppLibrary.Put File             ${rg_root}\\tools\\hpsum_execute_2.ini      C:\\
+    SppLibrary.Put File             ${rg_root}\\tools\\hpsum_report_2.ini       C:\\
+    SppLibrary.File Should Exist    C:\\hpsum_execute_1.ini
+    SppLibrary.File Should Exist    C:\\hpsum_report_1.ini
+    SppLibrary.File Should Exist    C:\\hpsum_execute_2.ini
+    SppLibrary.File Should Exist    C:\\hpsum_report_2.ini
+
+    #Move input files and csv file on RG to log folder
+    OperatingSystem.Move File   ${rg_root}\\tools\\hpsum_execute_1.ini      ${RG_LOG_PATH}
+    OperatingSystem.Move File   ${rg_root}\\tools\\hpsum_report_1.ini       ${RG_LOG_PATH}
+    OperatingSystem.Move File   ${rg_root}\\tools\\hpsum_execute_2.ini      ${RG_LOG_PATH}
+    OperatingSystem.Move File   ${rg_root}\\tools\\hpsum_report_2.ini       ${RG_LOG_PATH}
+    OperatingSystem.Copy File   ${rg_root}\\tools\\system_info.csv          ${RG_LOG_PATH}
+
+    #HPSUM command for input file
+    ${HPSUM_REPORT_COMMAND_1}=      Set Variable    ${COMMAND_HPSUM_START_WINDOWS} /inputfile c:\\hpsum_report_1.ini
+    ${HPSUM_EXECUTE_COMMAND_1}=     Set Variable    ${COMMAND_HPSUM_START_WINDOWS} /inputfile c:\\hpsum_execute_1.ini
+    ${HPSUM_REPORT_COMMAND_2}=      Set Variable    ${COMMAND_HPSUM_START_WINDOWS} /inputfile c:\\hpsum_report_2.ini
+    ${HPSUM_EXECUTE_COMMAND_2}=     Set Variable    ${COMMAND_HPSUM_START_WINDOWS} /inputfile c:\\hpsum_execute_2.ini
+    Set Suite Variable              ${HPSUM_REPORT_COMMAND_1}
+    Set Suite Variable              ${HPSUM_EXECUTE_COMMAND_1}
+    Set Suite Variable              ${HPSUM_REPORT_COMMAND_2}
+    Set Suite Variable              ${HPSUM_EXECUTE_COMMAND_2}
+
+Setup Remote Servers    [Arguments]         ${ACTUAL_HOST_INFO}
+                        [Documentation]     Setup wmi,ssh connections, install certificates,
+                        ...                 Disable UAC as applicable to respective servers
+                        ...                 Remove any unconfigured servers from servers list
+                        @{keys}=            Get Dictionary Keys     ${ACTUAL_HOST_INFO}
+                        :FOR                ${host_dict_key}        IN                      @{keys}
+                        \                   ${host_dict}=           Get From Dictionary     ${ACTUAL_HOST_INFO}
+                        \                   ...                     ${host_dict_key}
+                        \                   ${host}=                Get From Dictionary     ${host_dict}    SYSIP
+                        \                   ${uid}                  Get From Dictionary     ${host_dict}    UID
+                        \                   ${pwd}                  Get From Dictionary     ${host_dict}    PWD
+                        \                   ${type}=                Get From Dictionary     ${host_dict}    TYPE
+                        \                   Run Keyword IF          '${type}'=='WINDOWS'
+                        \                   ...                     Run Keyword And Continue On Failure     Configure Windows Servers
+                        \                   ...                     ${ACTUAL_HOST_INFO}     ${host}         ${uid}
+                        \                   ...                     ${pwd}
+                        \                   Run Keyword IF          '${type}'=='LINUX' or '${type}' == 'VMWARE'
+                        \                   ...                     Run Keyword And Continue On Failure     Configure Linux Servers
+                        \                   ...                     ${ACTUAL_HOST_INFO}     ${host}         ${uid}
+                        \                   ...                     ${pwd}
+
+    Set To Dictionary       ${LOG_DIRECTORIES}      '${SYSTEM_IP}'=${RG_LOG_PATH}
+    Set Suite Variable      ${HOST_INFO}            ${ACTUAL_HOST_INFO}
+    Check Configured Systems And Remove Failed Systems
+
+    #Check if atleast one server is available to continue forward
+    ${no_of_hosts}=         Get Length      ${HOST_INFO}
+    Set Suite Variable      ${no_of_hosts}
+    Should Be True          '${no_of_hosts}'!='${0}'
+    ...                     There are no hosts available to continue since all the provided host details are incorrect or they are not online. Exiting.
+    SppLibrary.Switch Connection            ${SYSTEM_IP}
+
+Configure Linux Servers     [Arguments]     ${ACTUAL_HOST_INFO}     ${host}     ${uname}    ${pwd}
+    [Documentation]         Opens ssh connections to remote linux server
+    ...                     Creates log directory for the server
+    ...                     Cleans any previous logs
+
+    ${log_path}=                    Create Directories For Logs     ${host}
+    Set To Dictionary               ${LOG_DIRECTORIES}              '${host}'=${log_path}
+    Set to Dictionary               &{ACTUAL_HOST_INFO}[${host}]    configured=${0}
+    Open Connection SSH             ${host}                         ${uname}    ${pwd}
+    SSHLibrary.Switch Connection    ${host}
+    UnixLibrary.Clean Logs Server
+    Set to Dictionary               &{ACTUAL_HOST_INFO}[${host}]    configured=${1}
+
+Configure Windows Servers   [Arguments]     ${ACTUAL_HOST_INFO}     ${host}     ${uname}    ${pwd}
+    [Documentation]         Set up the remote windows server
+    ...                     Cleans any previous logs
+    ...                     Installs auto key click
+
+    Set to Dictionary       &{ACTUAL_HOST_INFO}[${host}]    configured=${0}
+    Setup Windows Servers   ${host}                         ${uname}    ${pwd}
+    WinLibrary.Clean Logs Server
+    Set to Dictionary       &{ACTUAL_HOST_INFO}[${host}]    configured=${1}
+
+Setup Windows Servers   [Arguments]         ${host}     ${uname}    ${pwd}
+                        [Documentation]     Creates log directories for the server
+                        ...                 Opens a connection to the remote system
+
+    ${log_path}=                    Create Directories For Logs     ${host}
+    Set To Dictionary               ${LOG_DIRECTORIES}              '${host}'=${log_path}
+    Open Connection WMI             ${host}                         ${uname}    ${pwd}
+    SppLibrary.Switch Connection    ${host}
+
+Create Directories For Logs     [Arguments]     ${REMOTE_SYSTEM_IP}
+    [Documentation]             Creates directories for the system to hold logs and returns the log path
+    OperatingSystem.Create Directory            ${RG_LOG_PATH}/${REMOTE_SYSTEM_IP}
+    OperatingSystem.Directory Should Exist      ${RG_LOG_PATH}/${REMOTE_SYSTEM_IP}
+    [Return]                    ${RG_LOG_PATH}/${REMOTE_SYSTEM_IP}
+
+Check File For HPSUM Status     [Arguments]     ${host}     ${log_path}     ${msg}
+    [Documentation]             Parses the HPSUM log file and warns if hpsum failed for that host
+
+    ${status}=          SppLibrary.Parse HPSUM Log Status File      ${log_path}
+    Run Keyword IF      '${status}'==1
+    ...                 Log     ${msg} not started for ${host}. May be wrong credentials or server is down.     WARN
+
+Fetch Server Log Path   [Arguments]         ${host}
+                        [Documentation]     Fetch the related host's log path from dictionary
+
+    ${path}=                Get From Dictionary     ${LOG_DIRECTORIES}      '${host}'
+    Set Suite Variable      ${RG_LOG_PATH}          ${path}
+
+Check Configured Systems And Remove Failed Systems
+    [Documentation]     Checks whether all the provided systems are configured
+    ...                 and removes the failed systems from further HPSUM installation
+
+    @{keys}=    Get Dictionary Keys     ${HOST_INFO}
+    :FOR        ${host_dict_key}        IN                          @{keys}
+    \           ${host_dict}=           Get From Dictionary         ${HOST_INFO}    ${host_dict_key}
+    \           ${host}=                Get From Dictionary         ${host_dict}    SYSIP
+    \           ${configured}           Get From Dictionary         ${host_dict}    configured
+    \           Run Keyword If          ${configured}!=${1}         Run Keywords    Log
+    \           ...                     Username/Password for ${host} may be wrong or it is not online.Excluding from installation list.    WARN
+    \           ...                     AND
+    \           ...                     Remove From Dictionary      ${HOST_INFO}    ${host_dict_key}
+
+Kill HPSUM On Remote Servers
+    [Documentation]     Kill running hpsum processes if any on remote servers
+    @{keys}=            Get Dictionary Keys     ${HOST_INFO}
+    :FOR                ${host_dict_key}        IN                      @{keys}
+    \                   ${host_dict}=           Get From Dictionary     ${HOST_INFO}            ${host_dict_key}
+    \                   ${type}=                Get From Dictionary     ${host_dict}            TYPE
+    \                   ${host}=                Get From Dictionary     ${host_dict}            SYSIP
+    \                   Run Keyword IF          '${type}'=='LINUX' or '${type}' == 'VMWARE'     Run Keywords
+    \                   ...                     SSHLibrary.Switch Connection                    ${host}     AND
+    \                   ...                     UnixLibrary.Kill Process Name                   ${HPSUM_SERVICE_NAME}
+    \                   Run Keyword IF          '${type}'=='WINDOWS'    Run Keywords
+    \                   ...                     SppLibrary.Switch Connection                    ${host}     AND
+    \                   ...                     WinLibrary.Kill Process Name                    ${HPSUM_SERVICE_NAME}
+    SppLibrary.Switch Connection                ${SYSTEM_IP}
+
+Log Dependency Components First Time            [Arguments]             ${REMOTE_SYSTEM_IP}     ${dependency_dict}
+    [Documentation]     Checks for dependency components and logs if any available
+    ${check} =          Get From Dictionary     ${dependency_dict}      1
+    Run Keyword If      None != ${check}        Log
+    ...                 ${REMOTE_SYSTEM_IP} has dependency in components: ${check}
+    ...                 WARN
+
+First Dependency Check      [Arguments]     ${filename}
+    [Documentation]         Dependency check for components after first run of HPSUM for    all the servers
+
+    @{keys}=                Get Dictionary Keys     ${HOST_INFO}
+    :FOR                    ${host_dict_key}        IN                      @{keys}
+    \                       ${host_dict}=           Get From Dictionary     ${HOST_INFO}                    ${host_dict_key}
+    \                       ${REMOTE_SYSTEM_IP}=    Get From Dictionary     ${host_dict}                    SYSIP
+    \                       Fetch Server Log Path   ${REMOTE_SYSTEM_IP}
+    \                       ${status}               ${value}                Run Keyword And Ignore Error    Check Dependency
+    \                       ...                     ${RG_LOG_PATH}\\${filename}
+    \                       Run Keyword IF          '${status}' == 'PASS'
+    \                       ...                     Log Dependency Components First Time                    ${REMOTE_SYSTEM_IP}
+    \                       ...                     ${value}
+    \                       ...                     ELSE                    Run Keyword And Continue On Failure
+    \                       ...                     Fail                    First dependency check for ${REMOTE_SYSTEM_IP} failed: ${value}
+    Fetch Server Log Path   ${SYSTEM_IP}
+
+Log Dependency Components Second Time           [Arguments]             ${REMOTE_SYSTEM_IP}     ${dependency_dict}
+    [Documentation]     Checks for dependency components and logs if any available
+    ${check} =          Get From Dictionary     ${dependency_dict}      3
+    Run Keyword If      None != ${check}        Move Specific Remote Log Files To Temp Directory
+    ...                 ${REMOTE_SYSTEM_IP}
+    Run Keyword If      None != ${check}        Run Keywords
+    ...                 Log                     ${REMOTE_SYSTEM_IP} has dependency in components: ${check}
+    ...                 Error
+    ...                 AND
+    ...                 Append To List          ${dependency_nodes}     ${REMOTE_SYSTEM_IP}
+
+Second Dependency Check And Move File               [Arguments]             ${filename}
+    [Documentation]         Dependency check for components after second run of HPSUM for all servers
+    ${dependency_nodes}=    Create List
+    Set Suite Variable      ${dependency_nodes}
+    @{keys}=                Get Dictionary Keys     ${HOST_INFO}
+    :FOR                    ${host_dict_key}        IN                      @{keys}
+    \                       ${host_dict}=           Get From Dictionary     ${HOST_INFO}                    ${host_dict_key}
+    \                       ${REMOTE_SYSTEM_IP}=    Get From Dictionary     ${host_dict}                    SYSIP
+    \                       Fetch Server Log Path   ${REMOTE_SYSTEM_IP}
+    \                       ${status}               ${value}                Run Keyword And Ignore Error    Check Dependency
+    \                       ...                     ${RG_LOG_PATH}\\${filename}
+    \                       Run Keyword IF          '${status}' == 'PASS'
+    \                       ...                     Log Dependency Components Second Time                   ${REMOTE_SYSTEM_IP}
+    \                       ...                     ${value}
+    \                       ...                     ELSE                    Run Keyword And Continue On Failure
+    \                       ...                     Fail                    Second dependency check for ${REMOTE_SYSTEM_IP} failed: ${value}
+    Fetch Server Log Path   ${SYSTEM_IP}
+    ${DependencyNodesLen}=                          Get Length              ${dependency_nodes}
+    Should Be True          ${DependencyNodesLen} < ${no_of_hosts}          All the nodes have dependency components. Exiting
+    Run Keyword IF          '${DependencyNodesLen}' > '0'                   Run Keyword And Continue On Failure
+    ...                     Fail                    Dependency in components found for nodes ${dependency_nodes}
+
+Execute HPSUM And Get All Logs                      [Arguments]             ${command_template}
+    [Documentation]             Executes HPSUM for SPP installation and waits till process completion and then
+    ...                         collects all the HPSUM logs files
+    Fetch Server Log Path       ${SYSTEM_IP}
+    ${mounted_drive} =          WinLibrary.Get SPP Mount Point
+    ${command}=                 Construct Command   ${command_template}     ${mounted_drive}
+    Execute Command Psexec      ${command}          ${HPSUM_TIMEOUT}
+    Wait Until Host Power Status                    ${ILO_IP}               True
+    Collect All HPSUM Logs      @{HPSUM_LOG_FILES_WINDOWS}
+
+Collect All HPSUM Logs      [Arguments]             @{hpsum_log_files}
+    [Documentation]         Collects logs of all the remote servers
+    SppLibrary.Switch Connection                    ${SYSTEM_IP}
+    @{keys}=                Get Dictionary Keys     ${HOST_INFO}
+    :FOR                    ${host_dict_key}        IN                      @{keys}
+    \                       ${host_dict}=           Get From Dictionary     ${HOST_INFO}    ${host_dict_key}
+    \                       ${REMOTE_SYSTEM_IP}=    Get From Dictionary     ${host_dict}    SYSIP
+    \                       Fetch Server Log Path   ${REMOTE_SYSTEM_IP}
+    \                       Set Suite Variable      ${SUT_LOG_LOCATION}     ${REMOTE_SYSTEM_IP}
+    \                       WinLibrary.Collect HPSUM Logs                   @{hpsum_log_files}
+    Fetch Server Log Path   ${SYSTEM_IP}
+
+Analyze All HPSUM Logs      [Arguments]     ${file_tag}
+    [Documentation]         Analyzes all HPSUM log files
+
+    @{keys}=                Get Dictionary Keys     ${HOST_INFO}
+    :FOR                    ${host_dict_key}        IN                      @{keys}
+    \                       ${host_dict}=           Get From Dictionary     ${HOST_INFO}    ${host_dict_key}
+    \                       ${REMOTE_SYSTEM_IP}=    Get From Dictionary     ${host_dict}    SYSIP
+    \                       Fetch Server Log Path   ${REMOTE_SYSTEM_IP}
+    \                       Analyze HPSUM Log       ${REMOTE_SYSTEM_IP}_${file_tag}
+    \                       Run Keyword And Ignore Error                    OperatingSystem.Move File
+    \                       ...                     ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}
+    \                       ...                     ${RG_LOG_PATH}/${file_tag}_${HPSUM_DETAILS_LOG_XML}
+    Fetch Server Log Path   ${SYSTEM_IP}
+
+Reboot And Reset Remote Servers
+    [Documentation]         Reboot remote servers;Warn info of failed servers
+    ...                     Reset linux servers after reboot
+    ${failed_servers}=      SppLibrary.Reboot Servers   ${HOST_INFO}
+    Run Keyword IF          len(${failed_servers})>0
+    ...                     Log                         Servers that failed to reboot are ${failed_servers}     WARN
+    Reset Server Statuses
+
+Reset Server Statuses
+    [Documentation]     Opens ssh connections to linux servers after a reboot
+
+    Close All Connections
+    @{keys}=    Get Dictionary Keys     ${HOST_INFO}
+    :FOR        ${host_dict_key}        IN                      @{keys}
+    \           ${host_dict}=           Get From Dictionary     ${HOST_INFO}            ${host_dict_key}
+    \           ${type}=                Get From Dictionary     ${host_dict}            TYPE
+    \           ${host}=                Get From Dictionary     ${host_dict}            SYSIP
+    \           ${uid}                  Get From Dictionary     ${host_dict}            UID
+    \           ${pwd}                  Get From Dictionary     ${host_dict}            PWD
+    \           Run Keyword IF          '${type}'=='LINUX' or '${type}' == 'VMWARE'     Try Opening Connection
+    \           ...                     ${host_dict_key}        ${host}                 ${uid}      ${pwd}
+    Log         ${HOST_INFO} After reset of linux servers
+
+Try Opening Connection      [Arguments]                 ${host_dict_key}    ${host}                 ${uid}      ${pwd}
+    [Documentation]         Tries to open a connection.
+    ...                     Removes node from further processing if it is unable to
+    ${status}=              Run Keyword And Return Status
+    ...                     Open Connection SSH         ${host}             ${uid}                  ${pwd}
+    Run Keyword If          '{status}' == 'False'       Run Keywords
+    ...                     Log                         Unable to connect to ${host} after reboot   Error       AND
+    ...                     Remove From Dictionary      ${HOST_INFO}        ${host_dict_key}
+
+Move All Log Files To Temp Directory
+    [Documentation]                         Moves log files on main and remote servers to temp directory
+    SppLibrary.Switch Connection            ${SYSTEM_IP}
+    WinLibrary.Move Log Files To Temp Directory
+    Run Keyword And Continue On Failure     Move Remote Log Files To Temp Directory
+    SppLibrary.Switch Connection            ${SYSTEM_IP}
+
+Move Remote Log Files To Temp Directory
+    [Documentation]     Moves log files on remote servers to temp directory
+    @{keys}=            Get Dictionary Keys     ${HOST_INFO}
+    :FOR                ${host_dict_key}        IN                      @{keys}
+    \                   ${host_dict}=           Get From Dictionary     ${HOST_INFO}            ${host_dict_key}
+    \                   ${type}=                Get From Dictionary     ${host_dict}            TYPE
+    \                   ${host}=                Get From Dictionary     ${host_dict}            SYSIP
+    \                   ${uid}                  Get From Dictionary     ${host_dict}            UID
+    \                   ${pwd}                  Get From Dictionary     ${host_dict}            PWD
+    \                   Run Keyword IF          '${type}'=='LINUX' or '${type}' == 'VMWARE'     Run Keywords
+    \                   ...                     SSHLibrary.Switch Connection                    ${host}     AND
+    \                   ...                     UnixLibrary.Move Log Files To Temp Directory
+    \                   Run Keyword IF          '${type}'=='WINDOWS'    Run Keywords
+    \                   ...                     SppLibrary.Switch Connection                    ${host}     AND
+    \                   ...                     WinLibrary.Move Log Files To Temp Directory
+
+Move Specific Remote Log Files To Temp Directory    [Arguments]     ${REMOTE_SYSTEM_IP}
+    [Documentation]     Moves log files on remote servers to temp directory
+
+    ${host_dict}=       Get From Dictionary                     ${HOST_INFO}    ${REMOTE_SYSTEM_IP}
+    ${type}=            Get From Dictionary                     ${host_dict}    TYPE
+    ${host}=            Get From Dictionary                     ${host_dict}    SYSIP
+    ${uid}              Get From Dictionary                     ${host_dict}    UID
+    ${pwd}              Get From Dictionary                     ${host_dict}    PWD
+    Run Keyword IF      '${type}'=='LINUX' or '${type}' == 'VMWARE'             Run Keywords
+    ...                 SSHLibrary.Switch Connection            ${host}         AND
+    ...                 Run Keyword And Continue On Failure     UnixLibrary.Move Log Files To Temp Directory
+    Run Keyword IF      '${type}'=='WINDOWS'                    Run Keywords
+    ...                 SppLibrary.Switch Connection            ${host}         AND
+    ...                 Run Keyword And Continue On Failure     WinLibrary.Move Log Files To Temp Directory
+
+Clean Logs On All Servers
+    [Documentation]     Clean logs on Main and remote servers
+
+    SppLibrary.Switch Connection            ${SYSTEM_IP}
+    WinLibrary.Clean Logs Server
+    Run Keyword And Continue On Failure     Clean Logs On Remote Servers
+    SppLibrary.Switch Connection            ${SYSTEM_IP}
+
+Clean Logs On Remote Servers
+    [Documentation]     Cleans logs on all the remote servers where SPP needs to be installed
+
+    @{keys}=    Get Dictionary Keys     ${HOST_INFO}
+    :FOR        ${host_dict_key}        IN                      @{keys}
+    \           ${host_dict}=           Get From Dictionary     ${HOST_INFO}            ${host_dict_key}
+    \           ${REMOTE_SYSTEM_IP}=    Get From Dictionary     ${host_dict}            SYSIP
+    \           ${type}=                Get From Dictionary     ${host_dict}            TYPE
+    \           Run Keyword IF          '${type}'=='WINDOWS'    Run Keywords
+    \           ...                     SppLibrary.Switch Connection                    ${REMOTE_SYSTEM_IP}     AND
+    \           ...                     WinLibrary.Clean Logs Server
+    \           Run Keyword IF          '${type}'=='LINUX' or '${type}' == 'VMWARE'     Run Keywords
+    \           ...                     SSHLibrary.Switch Connection                    ${REMOTE_SYSTEM_IP}     AND
+    \           ...                     UnixLibrary.Clean Logs Server
+
+Parse Deploy Preview Report     [Arguments]     ${file_tag}     ${run_count}
+    [Documentation]             Parses deploy preview report and checks components to install are there or not.
+    ...
+    ...                         ${RG_LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+    ...
+    ...                         ${file_tag} -   HPSUM Deploy Run Count
+    ...
+    ...                         Example:
+    ...
+    ...                         | Parse Deploy Preview Report | Logs /${SUITE NAME} /${RG_LOG_PATH} | First Run
+
+    ${status} =                 Run Keyword And Return Status               OperatingSystem.File Should Exist
+    ...                         .\\${RG_LOG_PATH}\\${file_tag}_deploy_preview_Report.html
+    Return From Keyword If      '${status}' == 'False'
+    ${return_value} =           Run Keyword If      'True' in '${status}'   HPSUM Multi Node Deploy Report Check
+    ...                         ${RG_LOG_PATH}\\${file_tag}_deploy_preview_Report.html          ${run_count}
+    ${flag}=                    Get From List       ${return_value}         0
+    ${nodes}=                   Get From List       ${return_value}         1
+    Run Keyword If              '${file_tag}' == 'First_Run' and ${flag} == 1
+    ...                         Log                 Node(s) ${nodes} are already up to date     WARN
+    Run Keyword If              '${file_tag}' == 'Second_Run' and ${flag} == 0 or '${file_tag}' == 'Third_Run' and ${flag} == 0
+    ...                         Log                 "Not all components are installed successfully for node(s) ${nodes}. Check ${file_tag} Deploy Report"
+    ...                         WARN
+

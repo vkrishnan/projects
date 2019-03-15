@@ -1,0 +1,192 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Linux Remote Node
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v REMOTE_NODE_IP:<Remote-Node-IP> -v REMOTE_NODE_USERNAME:<Remote-Node-Username> -v REMOTE_NODE_PASSWORD:<Remote-Node-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> lin_remote.txt
+...             = Variables =
+...             | ILO_IP                    | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME              | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD              | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP                 | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME           | Optional | System username of the SUT; default _root_ |
+...             | SYSTEM_PASSWORD           | Optional | System password of the SUT; default _Compaq123_ |
+...             | REMOTE_NODE_IP            | Required | System IP address of the target |
+...             | REMOTE_NODE_USERNAME      | Optional | System username of the target; default _Administrator_ |
+...             | REMOTE_NODE_PASSWORD      | Optional | System password of the target; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH           | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE            | Optional | Virtual, DVD, USB; default _Virtual_ |
+
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+Library     SppLibrary
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     ${REMOTE_NODE_IP}
+
+
+*** Test Cases ***
+Install SPP (Silent) on Linux Remote Node
+    [Documentation]     Silent HPSUM installation with no options on Linux remote node
+    [Tags]              SPP Install
+
+    Initialze Test Case Variables
+
+    Ilo Connect             ${ILO_IP}           ${ILO_USERNAME}             ${ILO_PASSWORD}
+    Open Connection SSH     ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+    Open Connection SSH     ${SYSTEM_IP}        ${SYSTEM_USERNAME}          ${SYSTEM_PASSWORD}
+
+    Get HPSUM Version
+
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    SSHLibrary.Switch Connection    ${SYSTEM_IP}
+    Kill Process Name               ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+
+    # Collect Deploy Preview Report first time
+    ${command} =            Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX_REMOTE_NODE}      ${REMOTE_NODE_IP}
+    ...                     ${REMOTE_NODE_USERNAME}
+    ...                     ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report   ${command}          First_Run
+    Parse Deploy Preview Report                 First_Run
+
+    ${node_type} =      Check Node Architecture
+
+    # Set livelog
+    ${Livelog_file} =   Set Variable If
+    ...                 '${node_type}' == 'vmware'      lin_livelog.py
+    ...                 '${node_type}' == 'linux'       lin_to_lin_livelog.py
+
+    Clean Logs Server
+    SSHLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Clean Logs Server
+    SSHLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Execute HPSUM
+    ${command} =                Construct Command   ${COMMAND_HPSUM_LINUX_REMOTE_NODE}      ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Execute HPSUM And Get Log   ${command}          ${Livelog_file}
+
+    Run Keyword And Continue On Failure     OperatingSystem.Move File           .\\${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}
+    ...     .\\${RG_LOG_PATH}\\1_${HPSUM_DETAIL_LOG}
+    Run Keyword And Continue On Failure     OperatingSystem.Move File           .\\${RG_LOG_PATH}\\${HPSUM_LOG}
+    ...     .\\${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    Run Keyword And Continue On Failure     Analyze HPSUM Log                   first run
+    Run Keyword And Continue On Failure     Execute Gatherlogs And Get Log      first run
+
+    # Dependency Check
+    Run Keyword If      '${node_type}' == 'vmware'      Vmware Dependency Check And Move File
+    Run Keyword If      '${node_type}' == 'linux'       First Dependency Check
+
+    # Reboot remote node
+    SSHLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Reboot Remote Node
+    Wait Until Power Cycle          ${REMOTE_NODE_IP}
+    Open Connection SSH             ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+    SSHLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect Deploy Preview Report second time
+    Run Keyword If          '${node_type}' == 'vmware'      Move Log Files To Temp Directory
+    ${command} =            Construct Command               ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX_REMOTE_NODE}
+    ...                     ${REMOTE_NODE_IP}
+    ...                     ${REMOTE_NODE_USERNAME}
+    ...                     ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report   ${command}                      Second_Run
+
+    Run Keyword If      '${node_type}' == 'vmware'      Parse Deploy Preview Report     Second_Run
+    Run Keyword If      '${node_type}' == 'linux'       Call For Linux Test Case
+
+    [Teardown]      Testcase Cleanup
+
+
+*** Keywords ***
+
+First Dependency Check
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      1
+    Return From Keyword If                          None == ${check}
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     WARN
+
+Second Dependency Check And Move File
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      3
+    Return From Keyword If                          None == ${check}
+    Run Keyword If          None != ${check}        Run Keywords
+    ...                     Move Log Files To Temp Directory
+    ...                     AND
+    ...                     SSHLibrary.Switch Connection                    ${REMOTE_NODE_IP}
+    ...                     AND                     Move Log Files To Temp Directory
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     ERROR
+    Run Keyword If          None != ${check}        Fail                    Failed Due to dependency in component(s)
+
+Vmware Dependency Check And Move File
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      1
+    Return From Keyword If                          None == ${check}
+    Run Keyword If          None != ${check}        Move Log Files To Temp Directory
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     ERROR
+    Run Keyword If          None != ${check}        Fail                    Failed Due to dependency in component(s)
+
+Call For Linux Test Case
+    Run Keyword And Ignore Error                    OperatingSystem.Move File
+    ...                         ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}
+    ...                         ${RG_LOG_PATH}/first_run_${HPSUM_DETAILS_LOG_XML}
+    # Execute HPSUM
+    ${command} =                Construct Command   ${COMMAND_HPSUM_LINUX_REMOTE_NODE}      ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Execute HPSUM And Get Log   ${command}          lin_to_lin_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    OperatingSystem.Move File   .\\${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}          .\\${RG_LOG_PATH}\\2_${HPSUM_DETAIL_LOG}
+    OperatingSystem.Move File   .\\${RG_LOG_PATH}\\${HPSUM_LOG}                 .\\${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    Run Keyword And Continue On Failure     Analyze HPSUM Log                   second run
+    Run Keyword And Ignore Error            OperatingSystem.Move File           ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}
+    ...                         ${RG_LOG_PATH}/second_run_${HPSUM_DETAILS_LOG_XML}
+    Run Keyword And Continue On Failure     Execute Gatherlogs And Get Log      second run
+    Combine Files               .\\${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}          .\\${RG_LOG_PATH}\\1_${HPSUM_DETAIL_LOG}
+    ...                         .\\${RG_LOG_PATH}\\2_${HPSUM_DETAIL_LOG}
+    Combine Files               .\\${RG_LOG_PATH}\\${HPSUM_LOG}                 .\\${RG_LOG_PATH}\\1_${HPSUM_LOG}
+    ...                         .\\${RG_LOG_PATH}\\2_${HPSUM_LOG}
+    SSHLibrary.Put File         .\\${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}          /var/hp/log/${LOG_LOCATION}
+    SSHLibrary.Put File         .\\${RG_LOG_PATH}\\${HPSUM_LOG}                 /var/hp/log/${LOG_LOCATION}
+
+    # Second dependency check
+    Second Dependency Check And Move File
+
+    # Reboot remote node
+    SSHLibrary.Switch Connection    ${REMOTE_NODE_IP}
+    Reboot Remote Node
+    Wait Until Power Cycle          ${REMOTE_NODE_IP}
+    Open Connection SSH             ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+    SSHLibrary.Switch Connection    ${SYSTEM_IP}
+
+    # Collect Deploy Preview Report third time
+    Run Keyword And Ignore Error                    Move Log Files To Temp Directory
+    SSHLibrary.Switch Connection                    ${REMOTE_NODE_IP}
+    Run Keyword And Ignore Error                    Move Log Files To Temp Directory
+    SSHLibrary.Switch Connection                    ${SYSTEM_IP}
+    SSHLibrary.Start Command    rm -rf ${LOGS_LINUX}/${DEPLOY_PREVIEW_REPORT}*
+    ${command} =                Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX_REMOTE_NODE}      ${REMOTE_NODE_IP}
+    ...                         ${REMOTE_NODE_USERNAME}
+    ...                         ${REMOTE_NODE_PASSWORD}
+    Deploy Preview Report       ${command}          Third_Run
+    Parse Deploy Preview Report                     Third_Run
+

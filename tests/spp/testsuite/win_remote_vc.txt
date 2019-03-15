@@ -1,0 +1,92 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows Remote Virtual Connect
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v OA_USERNAME:<OA_Username> -v OA_PASSWORD:<OA_Password> -v VC_PRIMARY_IP:<vc_primary_ip> -v VC_SECONDARY_IP:<vc_secondary_ip> -v VC_USERNAME:<VC_username> -v VC_PASSWORD:<VC_password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> win_remote_vc.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP         | Required | System IP address of the Windows SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             | OA_USERNAME       | Optional | OA username of the target (OA); default _Administrator_ |
+...             | OA_PASSWORD       | Optional | OA password of the target (OA); default _Compaq123_ |
+...             | VC_PRIMARY_IP     | Required | Primary IP address of the target (VC) |
+...             | VC_SECONDARY_IP   | Required | Secondary IP address of the target (VC) |
+...             | VC_USERNAME       | Optional | Username of the target VC; default _Administrator_ |
+...             | VC_PASSWORD       | Optional | Password of the target UV; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH   | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE    | Optional | Virtual, DVD, USB; default _Virtual_ |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     ${VC_PRIMARY_IP}
+
+
+*** Test Cases ***
+Install SPP (Silent) on Virtual Connect
+    [Documentation]     Silent HPSUM installation on Virtual Connect
+    [Tags]              SPP Install
+
+    Initialze Test Case Variables
+
+    Ilo Connect             ${ILO_IP}       ${ILO_USERNAME}         ${ILO_PASSWORD}
+    Open Connection WMI     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+
+    # Enable AutoLogOn and Reboot Server
+    Enable AutoLogOn
+    Unmount And Reboot Server
+
+    Get HPSUM Version
+
+    Clean Logs Server
+
+    # Collect & Parse Deploy Preview Report first time
+    ${command}=             Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_VC_NODE}    %s
+    ...                     ${VC_PRIMARY_IP}
+    ...                     ${OA_USERNAME}
+    ...                     ${OA_PASSWORD}
+    ...                     ${VC_USERNAME}
+    ...                     ${VC_PASSWORD}
+    Deploy Preview Report   ${command}          First_Run
+    Parse Deploy Preview Report                 First_Run
+
+    Clean Logs Server
+
+    # Execute HPSUM
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_WINDOWS_VC_NODE}    %s      ${VC_PRIMARY_IP}
+    ...                         ${OA_USERNAME}
+    ...                         ${OA_PASSWORD}
+    ...                         ${VC_USERNAME}
+    ...                         ${VC_PASSWORD}
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+
+    Sleep   50s
+
+    #Check current VC IP
+    ${detail} =     Check HPSUM Detail Log      ${RG_LOG_PATH}\\${HPSUM_DETAIL_LOG}
+    ${ip} =         Set Variable If
+    ...             ${detail}==0                ${VC_SECONDARY_IP}
+    ...             ${detail}==1                ${VC_PRIMARY_IP}
+
+    #Collect Deploy Preview Report Second time
+    ${command}=             Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_VC_NODE}    %s
+    ...                     ${ip}
+    ...                     ${OA_USERNAME}
+    ...                     ${OA_PASSWORD}
+    ...                     ${VC_USERNAME}
+    ...                     ${VC_PASSWORD}
+    Deploy Preview Report   ${command}          Second_Run
+    Parse Deploy Preview Report                 Second_Run
+
+    [Teardown]      Testcase Cleanup
+

@@ -1,0 +1,18 @@
+*** Settings ***
+Library    SppLibrary.core.WindowsRemoteLibrary
+
+*** Variables ***
+${HOSTNAME1}    	172.20.56.183
+${USERNAME} 		Administrator
+${PASSWORD}     	Compaq123
+
+*** Test Cases ***
+Test Wait For Process
+	[Tags]    process
+	Open Connection    ${HOSTNAME1}    ${USERNAME}    ${PASSWORD}
+	Wait For Process Exit    System    5
+
+Test Wait For Process Does Not Exist
+	[Tags]    process
+	Open Connection    ${HOSTNAME1}    ${USERNAME}    ${PASSWORD}
+	Wait For Process Exit    System1    5

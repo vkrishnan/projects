@@ -1,0 +1,252 @@
+*** Settings ***
+Documentation   VMware Signature Validation Using Windows
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v REMOTE_NODE_IP:<Remote-Node-IP> -v REMOTE_NODE_USERNAME:<Remote-Node-Username> -v REMOTE_NODE_PASSWORD:<Remote-Node-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> vmware_signature_validation.txt
+...             = Variables =
+...             | ILO_IP                    | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME              | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD              | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP                 | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME           | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD           | Optional | System password of the SUT; default _Compaq123_ |
+...             | REMOTE_NODE_IP            | Required | System IP address of the SUT |
+...             | REMOTE_NODE_USERNAME      | Optional | System username of the SUT; default _Administrator__ |
+...             | REMOTE_NODE_PASSWORD      | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH           | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE            | Optional | Virtual, CDDVDW, USB; default _Virtual_ |
+...             = prerequisites =
+...             | PSEXEC                    | Need to install this module in RG server      |
+...             | html5lib                  | Need to install this module in RG server      |
+...             | Unzip.exe                 | This file should exist in specified path      |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     ${REMOTE_NODE_IP}
+${destination}          C:\\temp_unzip
+@{HP_UNSIG}
+${SYSTEM_OS}            Windows
+
+
+*** Test Cases ***
+VMware Signature Validation(Silent)
+    [Documentation]     Silent Method for VMware Signature Validation
+    [Tags]              SPP Signature Validation
+
+    #Initialize directory structure
+    Initialze Test Case Variables
+
+    #Establish connection and enable autologon for Windows.
+    Ilo Connect             ${ILO_IP}           ${ILO_USERNAME}             ${ILO_PASSWORD}
+    Open Connection WMI     ${SYSTEM_IP}        ${SYSTEM_USERNAME}          ${SYSTEM_PASSWORD}
+    Open Connection SSH     ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+    Enable AutoLogOn
+    WinLibrary.Unmount SPP Image
+    WinLibrary.Reboot Server
+
+    WinLibrary.Get HPSUM Version
+    Get Contents HTML File
+
+    #Log clean up
+    WinLibrary.Clean Logs Server
+    UnixLibrary.Clean Logs Server
+
+    # Collect Deploy Preview Report first time
+    ${command}=     Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...             ${REMOTE_NODE_IP}
+    ...             ${REMOTE_NODE_USERNAME}
+    ...             ${REMOTE_NODE_PASSWORD}
+
+    WinLibrary.Deploy Preview Report    ${command}      First_Run
+    Parse Deploy Preview Report         First_Run
+
+    WinLibrary.Clean Logs Server
+    UnixLibrary.Clean Logs Server
+
+    # Check VMware version.
+    SSHLibrary.Start Command    vmware -v | awk '{print $3}'
+    ${vm_version} =             Read Command Output     Log
+
+    # Check HP Signed Component for Signature
+    ${mounted_drive} =      WinLibrary.Get SPP Mount Point
+    ${RG_ROOT} =            Get RG Root
+    ${COMP_ID} =            Hpsign Cpid     ${RG_LOG_PATH}\\${HPSUM_CONTENT_FILE}   ${vm_version}
+    ${len} =                Get Length      ${COMP_ID}
+    :FOR                    ${i}            IN RANGE            0                   ${len}
+    \                       Log             Component_name is ${COMP_ID[${i}]}
+    \                       VIB Install     ${RG_LOG_PATH}      ${mounted_drive}    ${COMP_ID[${i}]}    ${RG_ROOT}
+
+    # Start HPSUM Service
+    ${command}=     Construct Command   ${COMMAND_HPSUM_START_WINDOWS}      ${mounted_drive}
+    SppLibrary.Start Command Psexec     ${command}
+    : FOR           ${index}            IN RANGE                1           300
+    \               ${HPSUM_PID} =      SppLibrary.get pid      ${HPSUM_SERVICE_NAME}
+    \               Exit for loop if    ${HPSUM_PID} != None
+
+    # Rewrite HPSUM Configuration File
+    ${username} =       Get Username
+    ${hpsum_path} =     String.Replace String       ${HPSUM_TMP_DIR_PATH}       {{USERNAME}}    ${username}
+    Log                 ${HPSUM_CONFIG_FILE}
+    Sleep               100s
+    : FOR               ${index}                    IN RANGE                    1               30
+    \                   Sleep                       5s
+    \                   Run Keyword And Continue On Failure                     SppLibrary.Get File
+    \                   ...                         ${hpsum_path}\\${HPSUM_CONFIG_FILE}
+    \                   ...                         ${RG_LOG_PATH}
+    \                   Sleep                       10s
+    \                   OperatingSystem.File Should Exist                       ${RG_LOG_PATH}\\${HPSUM_CONFIG_FILE}
+    \                   Sleep                       5s
+    \                   ${content}=                 OperatingSystem.Grep File   ${RG_LOG_PATH}\\${HPSUM_CONFIG_FILE}
+    \                   ...                         ${VIB_CHECK_STRING}
+    \                   Log                         ${content}
+    \                   Exit for loop if            '${VIB_CHECK_STRING}' in '${content}'
+    ${Output}=          Read hpsum config file      ${RG_LOG_PATH}\\${HPSUM_CONFIG_FILE}
+    Log                 ${Output}                   WARN
+    Sleep               10s
+    Run Keyword And Continue On Failure             SppLibrary.Put File
+    ...                 ${RG_LOG_PATH}\\${HPSUM_CONFIG_FILE}
+    ...                 ${hpsum_path}
+    Sleep               5s
+    Remove File         ${RG_LOG_PATH}\\${HPSUM_CONFIG_FILE}
+
+    # Kill HPSUM Process
+    WinLibrary.Kill Process Name    ${HPSUM_SERVICE_NAME}
+    Sleep   10s
+
+    # Execute HPSUM
+    ${command}=     Construct Command       ${COMMAND_HPSUM_WINDOWS_REMOTE_NODE}    %s
+    ...             ${REMOTE_NODE_IP}
+    ...             ${REMOTE_NODE_USERNAME}
+    ...             ${REMOTE_NODE_PASSWORD}
+    WinLibrary.Execute HPSUM And Get Log    ${command}      win_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    Run Keyword And Continue On Failure     Analyze HPSUM Log   first run
+    Run Keyword And Continue On Failure     WinLibrary.Execute Gatherlogs And Get Log
+
+    # Dependency check
+    Dependency Check
+
+    # Reboot remote node.
+    UnixLibrary.Reboot Remote Node
+    Wait Until Power Cycle      ${REMOTE_NODE_IP}
+
+    # Collect Deploy Preview Report second time
+    ${command}=     Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...             ${REMOTE_NODE_IP}
+    ...             ${REMOTE_NODE_USERNAME}
+    ...             ${REMOTE_NODE_PASSWORD}
+    WinLibrary.Deploy Preview Report    ${command}      Second_Run
+    Parse Deploy Preview Report         Second_Run
+
+    # Check Component for Signature
+    SppLibrary.Execute Command Psexec   rmdir /S /Q ${SUT_TEMP_DIR_WINDOWS}     20
+    SppLibrary.Put File     ${RG_ROOT}\\tools\\third_party\\unzip.exe           ${SUT_TEMP_DIR_WINDOWS}
+    Sleep                   5s
+
+    ${COMP_LIST} =      Build Signature List    ${RG_LOG_PATH}\\${HPSUM_CONTENT_FILE}
+    ${TOTAL_COMP}       Get Length              ${COMP_LIST}
+    Log                 Total VMware Components : ${TOTAL_COMP}
+
+    : FOR   ${index}                    IN                      @{COMP_LIST}
+    \       WinLibrary.Kill Process Name                        unzip
+    \       SppLibrary.Execute Command Psexec                   rmdir /S /Q C:\\temp_unzip                  20
+    \       SppLibrary.Execute Command Psexec                   rmdir /S /Q C:\\temp_reunzip                20
+    \       Continue For Loop If        'zip' not in '${index}'
+    \       Unzip Files                 ${SYSTEM_IP}            ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    \       ...                         ${destination}
+    \       ...                         ${mounted_drive}${SOURCE}${index}
+    \       ${out} =                    Get File Names          \\temp_unzip\\          C:                  zip
+    \       ${length}                   Get Length              ${out}
+    \       Continue For Loop If        ${length} == 0
+    \       ${SIGN}                     Check File Name         ${out[0]}
+    \       Run Keyword If              'Unsigned' in '${SIGN}'                         Unzip Files         ${SYSTEM_IP}
+    \       ...                         ${SYSTEM_USERNAME}
+    \       ...                         ${SYSTEM_PASSWORD}      C:\\temp_reunzip        ${out[0]}
+    \       ${out} =                    Get File Names          \\temp_reunzip\\        C:                  zip
+    \       ${length}                   Get Length              ${out}
+    \       Continue For Loop If        ${length} == 0
+    \       ${SIGN}                     Check File Name         ${out[0]}
+    \       Run Keyword If              'Unsigned' in '${SIGN}'                         Append To List      ${HP_UNSIG}
+    \       ...                         ${index}
+    \       Run Keyword If              'Unsigned' in '${SIGN}'                         Log
+    \       ...                         Unsigned Component :: ${index}
+    \       ...                         WARN
+    SppLibrary.Execute Command Psexec   rmdir /S /Q C:\\temp_unzip                      20
+    SppLibrary.Execute Command Psexec   rmdir /S /Q C:\\temp_reunzip                    20
+
+    ${length}           Get Length          ${HP_UNSIG}
+    Run Keyword If      ${length} != 0      Fail    \nUnsigned Components :::\n ${HP_UNSIG}
+
+    [Teardown]      WinLibrary.Testcase Cleanup
+
+
+*** Keywords ***
+Dependency Check
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      1
+    Return From Keyword If                          None == ${check}
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     WARN
+
+VIB Install     [Arguments]         ${RG_LOG_PATH}      ${mounted_drive}    ${Component_name}   ${RG_ROOT}
+                [Documentation]     The keyword will get the net-mst, hpdsa and hpvsa components, it will search the VIB file in that.
+                ...                 It will install the VIb, and check it is signed or not.
+
+    SppLibrary.Execute Command                          cmd.exe /c copy ${mounted_drive}${SOURCE}${Component_name} C:\\Users\\
+    ...                         5
+    Run Keyword And Continue On Failure                 SppLibrary.Get File     C:\\Users\\${Component_name}    ${destination}
+    ${out}                      Run
+    ...                         ${RG_ROOT}\\tools\\third_party\\unzip.exe -d ${destination}\\unzip ${destination}\\${Component_name}
+    ${check} =                  OperatingSystem.List Files In Directory         ${destination}\\unzip
+    ${zip_filename} =           Get Matches             ${check}                *.zip
+    ${vib_path}                 ${vib_name} =           Get File Path           ${destination}\\unzip\\${zip_filename[0]}
+    Run                         ${RG_ROOT}\\tools\\third_party\\unzip.exe -d ${destination}\\unzip2 ${destination}\\unzip\\${zip_filename[0]}
+    SSHLibrary.Put File         ${destination}\\unzip2\\${vib_path}             /tmp
+    ${vib_out}                  Execute Command On Remote System
+    ...                         esxcli software vib install -v "/tmp/${vib_name}"
+    ${status}                   Run Keyword And Return Status                   Should Not Contain              ${vib_out}
+    ...                         Could not find a trusted signer
+    ...                         ${vib_out}
+    ${status1}                  Run Keyword And Return Status                   Should Match Regexp             ${vib_out}
+    ...                         VIBs Skipped:.\\S
+    Run Keyword if              ${status} == False      Append To List          ${HP_UNSIG}
+    ...                         ${Component_name}
+    Run Keyword if              ${status} == False      Log                     Unsigned Component :: ${Component_name}
+    ...                         WARN
+    ${va}                       Split String            ${vib_out}              _
+    ${rvib_out}                 Run Keyword if          ${status1} == True      Execute Command On Remote System
+    ...                         esxcli software vib remove --vibname=${va[2]}
+    Run Keyword if              ${status1} == True      Reboot VMware Server
+    Run Keyword if              ${status1} == True      SSHLibrary.Put File     ${destination}\\unzip2\\${vib_path}     /tmp
+    ${vib_out2}                 Run Keyword if          ${status1} == True      Execute Command On Remote System
+    ...                         esxcli software vib install -v "/tmp/${vib_name}"
+    ${status2}                  Run Keyword if          ${status1} == True      Run Keyword And Return Status
+    ...                         Should Not Contain
+    ...                         ${vib_out2}             Could not find a trusted signer                         ${vib_out2}
+    Run Keyword if              ${status2} == False     Append To List          ${HP_UNSIG}
+    ...                         ${Component_name}
+    Run Keyword if              ${status2} == False     Log                     Unsigned Component :: ${Component_name}
+    ...                         WARN
+    SSHLibrary.Start Command    rm /tmp/${vib_name}
+    Run                         cmd.exe /c rmdir /S /Q C:\\temp_unzip
+
+Execute Command On Remote System    [Arguments]             ${COMMAND}
+    SSHLibrary.Start Command        ${COMMAND}
+    ${vib_out}                      Read Command Output     Log
+    [Return]                        ${vib_out}
+
+Reboot VMware Server
+    UnixLibrary.Reboot Remote Node
+    Wait Until Power Cycle      ${REMOTE_NODE_IP}
+    Open Connection SSH         ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+

@@ -1,0 +1,123 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows Remote Node (Force All)
+...             Target machine should be VMware and Host should be Windows.
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v REMOTE_NODE_IP:<Remote-Node-IP> -v REMOTE_NODE_USERNAME:<Remote-Node-Username> -v REMOTE_NODE_PASSWORD:<Remote-Node-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Spp-Mount-Type> win_remote_force.txt
+...             = Variables =
+...             | ILO_IP                    | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME              | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD              | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP                 | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME           | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD           | Optional | System password of the SUT; default _Compaq123_ |
+...             | REMOTE_NODE_IP            | Required | System IP address of the target |
+...             | REMOTE_NODE_USERNAME      | Optional | System username of the target; default _Administrator_ |
+...             | REMOTE_NODE_PASSWORD      | Optional | System password of the target; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH           | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE            | Optional | Virtual, DVD, USB; default _Virtual_ |
+...             = Prerequisites =
+...             Requires PSEXEC to be available and added in the environment variables.
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     ${REMOTE_NODE_IP}
+
+
+*** Test Cases ***
+Install SPP (Silent with Force) on Windows Remote Node
+    [Documentation]     Silent HPSUM installation with force options on Windows remote node
+    [Tags]              SPP Install
+
+    Initialze Test Case Variables
+
+    Ilo Connect             ${ILO_IP}           ${ILO_USERNAME}             ${ILO_PASSWORD}
+    Open Connection WMI     ${SYSTEM_IP}        ${SYSTEM_USERNAME}          ${SYSTEM_PASSWORD}
+    Open Connection SSH     ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+
+    # Enable AutoLogOn and Reboot Server
+    Enable AutoLogOn
+    WinLibrary.Unmount SPP Image
+    WinLibrary.Reboot Server
+
+    WinLibrary.Get HPSUM Version
+
+    # Clean logs on Host and remote node
+    UnixLibrary.Kill Process Name   ${HPSUM_SERVICE_NAME}
+    WinLibrary.Clean Logs Server
+    UnixLibrary.Clean Logs Server
+
+    # Collect & Parse Deploy Preview Report first time
+    ${command} =    Construct Command   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s      ${REMOTE_NODE_IP}
+    ...             ${REMOTE_NODE_USERNAME}
+    ...             ${REMOTE_NODE_PASSWORD}
+    WinLibrary.Deploy Preview Report    ${command}      First_Run
+    Parse Deploy Preview Report         First_Run
+
+    ${node_type} =      WinLibrary.Check Node Architecture
+
+    # Clean logs on Host and remote node
+    WinLibrary.Clean Logs Server
+    UnixLibrary.Clean Logs Server
+
+    # Set livelog
+    ${Livelog_file} =   Set Variable If
+    ...                 '${node_type}' == 'vmware'      win_livelog.py
+    ...                 '${node_type}' == 'linux'       win_to_lin_livelog.py
+
+    # Execute HPSUM
+    ${command} =    Construct Command       ${COMMAND_HPSUM_WINDOWS_REMOTE_NODE_FORCEALL}   %s      ${REMOTE_NODE_IP}
+    ...             ${REMOTE_NODE_USERNAME}
+    ...             ${REMOTE_NODE_PASSWORD}
+    WinLibrary.Execute HPSUM And Get Log    ${command}      ${Livelog_file}
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    Run Keyword And Continue On Failure     Analyze HPSUM Log   first run
+    Run Keyword And Continue On Failure     WinLibrary.Execute Gatherlogs And Get Log
+
+    # Dependency Check
+    Dependency Check    ${node_type}
+
+    UnixLibrary.Reboot Remote Node
+    Wait Until Power Cycle      ${REMOTE_NODE_IP}
+    Open Connection SSH         ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+
+    # Collect & Parse Deploy Preview Report second time
+    Run Keyword If      '${node_type}' == 'linux'   Run Keyword And Continue On Failure
+    ...                 UnixLibrary.Move Log Files To Temp Directory
+    Run Keyword And Continue On Failure             WinLibrary.Move Log Files To Temp Directory
+    ${command} =        Construct Command           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS_REMOTE_NODE}    %s
+    ...                 ${REMOTE_NODE_IP}
+    ...                 ${REMOTE_NODE_USERNAME}
+    ...                 ${REMOTE_NODE_PASSWORD}
+    WinLibrary.Deploy Preview Report                ${command}      Second_Run
+    Parse Deploy Preview Report                     Second_Run
+
+    [Teardown]      WinLibrary.Testcase Cleanup
+
+
+*** Keywords ***
+Dependency Check    [Arguments]             ${node_type}
+                    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\${HPSUM_LOG}
+                    ${check} =              Get From Dictionary     ${dependency_dict}          1
+                    Return From Keyword If                          None == ${check}
+                    Run Keyword If          None != ${check} and '${node_type}' == 'linux'      Run Keywords
+                    ...                     WinLibrary.Move Log Files To Temp Directory
+                    ...                     AND                     UnixLibrary.Move Log Files To Temp Directory
+                    Run Keyword If          None != ${check} and '${node_type}' == 'vmware'
+                    ...                     WinLibrary.Move Log Files To Temp Directory
+                    ${components} =         Get Dictionary Keys     ${check}
+                    ${len}                  Get Length              ${components}
+                    :FOR                    ${index}                IN RANGE                    0   ${len}
+                    \                       ${services}             Get From Dictionary         ${check}
+                    \                       ...                     ${components[${index}]}
+                    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+                    \                       ...                     ERROR
+                    Run Keyword If          None != ${check}        Fail
+                    ...                     Failed Due to dependency in component(s)
+

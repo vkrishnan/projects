@@ -1,0 +1,72 @@
+*** Settings ***
+Documentation   Linux Post-install Verification
+...             = Usage =
+...             pybot -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> lin_piv.txt
+...             = Variables =
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             = Prerequisites =
+...             SPP should be installed on SUT using automation scripts.
+...             Chrome browser must be installed and chromedriver must be available in system path
+
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Resource    SppLibrary/resource/spp_piv_linux.robot
+Variables   SppLibrary/config/variables.py
+Library     SppLibrary
+Library     OperatingSystem
+
+
+*** Variables ***
+${SELENIUM_IMPLICIT_WAIT}   40s
+${PIV_URL}                  https://{{SYSTEM_IP}}:2381
+
+
+*** Test Cases ***
+Linux PIV
+    [Documentation]     Post-install verification for Linux
+    [Tags]              PIV
+
+    Initialze Test Case Variables
+
+    Open Connection SSH     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Check HPSUM Version
+
+    Run Keyword And Continue On Failure     Execute Linux Command For SNMP Agents Configuration
+    Run Keyword And Continue On Failure     Verify Services are Running
+    Run Keyword And Continue On Failure     Verify HPSUM Log Files Existence
+    Run Keyword And Continue On Failure     Verification Of Files For Write Permission
+    Run Keyword And Continue On Failure     File Size Should Not Be Zero
+    Run Keyword And Continue On Failure     Component Status Post Installation
+    Run Keyword And Continue On Failure     Verify HP SSA Service
+    Run Keyword And Continue On Failure     Check Linux SMH PIV
+
+    [Teardown]      Run Keyword And Ignore Error    SppLibrary.SMH PIV Wrapup
+
+
+*** Keywords ***
+Check HPSUM Version
+    [Documentation]     Author: Sriram Chowdary
+    ...
+    ...                 Check hpsum_log.txt file and return existence status.
+    ...
+    ...                 Import config file based on hpsum_log.txt file existence status.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Check HPSUM Version |
+    ${STATUS}           Run Keyword And Return Status               SSHLibrary.File Should Exist
+    ...                 /tmp/temp/hpsum_log.txt
+    Run Keyword If      ${STATUS} == False      Import Variables    SppLibrary/config/hpsum_config_8.py
+    ...                 ELSE IF                 ${STATUS} == True   Import Variables
+    ...                 SppLibrary/config/hpsum_config_7.py
+    ...                 ELSE                    Should Be True      ${HPSUM_VERSION} == 8 or ${HPSUM_VERSION} == 7
+    ...                 " Didn't find HPSUM version "
+
+Check Linux SMH PIV
+    [Documentation]     Check PIV
+    ${URL}=             Replace String      ${PIV_URL}              {{SYSTEM_IP}}   ${SYSTEM_IP}
+    SMH PIV Check       ${URL}              ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    ...                 ${RG_LOG_PATH}      linux                   proliant
+

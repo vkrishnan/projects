@@ -1,0 +1,1058 @@
+*** Settings ***
+Library     RoboGalaxyLibrary
+Library     String
+Library     Collections
+Library     OperatingSystem
+Library     Dialogs
+Library     XML
+Library     SSHLibrary      10 seconds
+Library     Process
+
+*** Variables ***
+${MOUNT_DIR_CMD}            mount | grep 'SPP' | awk '{print $3}'
+${HPSUM_SERVICE_CMD}        ps aux | grep 'hpsum_service' | awk 'NR == 1' | awk '{print $2}'
+${HPSUM_PROCESSES_CMD}      ps aux | grep 'hpsum' | awk '{print $2}'
+${MOUNT_POINT_RE}           .+(SPP\\w+).
+${GATHERLOGS_TIMEOUT}       120
+${COMMAND_TIMEOUT}          10
+${HPSUM_START_TIMEOUT}      600
+@{ERROR_CODES}              -1      -2      -3
+${DEPLOY_ERROR_MESSAGE}     Deploy error.
+${Cert_DIR}                 C:\\dev\\spp\\tests\\spp\\resource\\signature\\win_cert
+${DISABLE_UAC}              reg ADD "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" /v EnableLUA /t REG_DWORD /d 0 /f\
+${CMD_ENABLE_AUTOLOGON}     reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f
+${CMD_ADD_AUTO_USERNAME}    reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultUserName /t REG_SZ /d %s /f
+${CMD_ADD_AUTO_PASSWORD}    reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultPassword /t REG_SZ /d %s /f
+
+
+*** Keywords ***
+
+Open Connection And Log In Ilo
+    [Documentation]             Opens a SSH connection to the ilo with variables ILO_IP, ILO_USERNAME and ILO_PASSWORD
+    ...                         present in the variables.py file or passed as command line arguments.
+    ...
+    ...                         *TBD* - Parameterize the hostname and credentials
+    Open Connection             ${ILO_IP}           prompt=->           timeout=30 seconds      alias=ilo conn
+    Login                       ${ILO_USERNAME}     ${ILO_PASSWORD}
+    Ilo Connect      ${ILO_IP}           ${ILO_USERNAME}     ${ILO_PASSWORD}
+
+Open Connection And Log In System
+    [Documentation]     Opens a SSH connection to the system with variables SYSTEM_IP, SYSTEM_USERNAME
+    ...                 and ILO_PASSWORD preset in the variables.py file or passed as command line arguments.
+    ...
+    ...                 *TBD* - This keyword can be removed once Open Connection And Log In Ilo is paramterized.
+    Open Connection     ${SYSTEM_IP}            timeout=30 seconds      alias=sys conn
+    Login               ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+
+Open Connection And Log In Remote System
+    [Documentation]     Opens a SSH connection to the remote system with variables REMOTE_NODE_IP, REMOTE_NODE_USERNAME
+    ...                 and REMOTE_NODE_PASSWORD preset in the variables.py file or passed as command line arguments.
+    ...
+    ...                 *TBD* - This keyword can be removed once Open Connection And Log In Ilo is paramterized.
+    Open Connection     ${REMOTE_NODE_IP}           timeout=30 seconds      alias=remote conn
+    Login               ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+
+Mount Image If Not Auto Mounted                         [Arguments]             ${IMAGE}
+    [Documentation]     Mounts the image manually if it is not auto-mounted.
+    ...
+    ...                 ${IMAGE} is the absolute path of the ISO image.
+    ...
+    ...                 1. Checks if any image is mounted by searching for 'SPP' in the output of mount command.
+    ...
+    ...                 2. Finds the DVD-ROM device location using the "lsscsi" command.
+    ...
+    ...                 3. Creates a directory and mounts the device to that directory.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Mount Image If Not Auto Mounted | http://172.20.59.221/Snap3/Build85/SPPGen9Snap3.2015_0403.85.iso |
+    ...
+    ...                 *TBD* - This keyword should become part of Mount Iso By Ilo
+    ${connection} =     Get Connection                  sys conn
+    Run Keyword If      '${connection.host}' == 'None'                          Open Connection And Log In System
+    Switch Connection   sys conn
+    Sleep               5s
+    # The status is used to determine if connection exists
+    ${status} =         Run Keyword And Return Status   Execute Command         mount | grep 'SPP' | wc -l
+    Run Keyword If      ${status} == False              Open Connection And Log In System
+    ${mounted} =        Execute Command                 mount | grep 'SPP' | wc -l
+    Run Keyword If      '${mounted}' != '0'             Return From Keyword
+    ${match}            ${spp_ver} =                    Should Match Regexp     ${IMAGE}    ${MOUNT_POINT_RE}
+    Execute Command     mkdir ${spp_ver}
+    ${output} =         Execute Command                 lsscsi
+    Log                 ${output}
+    ${mpath} =          Execute Command                 lsscsi | grep 'DVD-ROM' | awk '{print $6}'
+    Log                 ${mpath}
+    Execute Command     mount ${mpath} ${spp_ver}
+    Sleep               20s
+
+Mount Iso By Ilo    [Arguments]         ${IMAGE}
+                    [Documentation]     Mounts the image through the ilo.
+                    ...
+                    ...                 ${IMAGE} is the absolute path of the ISO image.
+                    ...
+                    ...                 Example:
+                    ...                 | Mount Iso By Ilo | http://172.20.59.221/Snap3/Build85/SPPGen9Snap3.2015_0403.85.iso |
+                    ...
+                    ...                 *TBD* - Keyword "Mount Image If Not Auto Mounted" should become part of this keyword.
+                    ${dict} =    Ilo Get Virtual Media Status
+                    ${vm_applet} =   Get From Dictionary    ${dict}     vm_applet
+                    ${image_inserted} =   Get From Dictionary    ${dict}     image_inserted
+                    ${connection} =     Get Connection                  ilo conn
+                    Run Keyword If      '${connection.host}' == 'None'          Open Connection And Log In Ilo
+                    Switch Connection   ilo conn
+                    Run Keyword If      '${vm_applet}' == 'CONNECTED'               Write   reset /map1
+                    Run Keyword If      '${vm_applet}' == 'CONNECTED'               Sleep    10s
+                    Run Keyword If      '${vm_applet}' == 'CONNECTED'               Wait Until Keyword Succeeds
+                    ...                 2 min    0s    Open Connection And Log In Ilo
+                    Run Keyword If      '${vm_applet}' == 'DISCONNECTED' and '${image_inserted}' == 'YES'        
+                    ...                 Ilo Eject Virtual Media
+                    
+                    # The status is used to determine if connection exists
+                    ${status} =         Run Keyword And Return Status   Write   set /map1/oemhp_vm1/cddr1 oemhp_image=${IMAGE}
+                    Run Keyword If      ${status} == False              Open Connection And Log In Ilo
+                    Run Keyword If      ${status} == False              Write   set /map1/oemhp_vm1/cddr1 oemhp_image=${IMAGE}
+                    ${output}=          Read Until                      ->
+                    Should Contain      ${output}                       status=0
+                    Write               set /map1/oemhp_vm1/cddr1 oemhp_boot=connect
+                    ${output}=          Read Until                      ->
+                    Should Contain      ${output}                       status=0
+                    Write               set /map1/oemhp_vm1/cddr1 oemhp_boot=once
+                    ${output}=          Read Until                      ->
+                    Should Contain      ${output}                       status=0
+                    Sleep               30s
+
+Umount Iso By Ilo
+    [Documentation]         Unmounts the image through the ilo.
+    ...
+    ...                     Example:
+    ...
+    ...                     | Unmount Iso By Ilo |
+    ...
+    ...                     *TBD* - Keyword "Unmount Image If Not Unmounted" should become part of this keyword.
+    ${connection} =         Get Connection                  ilo conn
+    Run Keyword If          '${connection.host}' == 'None'                      Open Connection And Log In Ilo
+    Switch Connection       ilo conn
+    # The status is used to determine if connection exists
+    ${status} =             Run Keyword And Return Status   Write               set /map1/oemhp_vm1/cddr1 oemhp_boot=disconnect
+    Run Keyword If          ${status} == False              Open Connection And Log In Ilo
+    Run Keyword If          ${status} == False              Write               set /map1/oemhp_vm1/cddr1 oemhp_boot=disconnect
+    ${output}=              Read Until                      ->
+    ${status}               ${VALUE}=                       Run Keyword And Ignore Error    Should Contain      ${output}
+    ...                     status=0
+    Run Keyword If          '${status}'=='PASS'             Should Contain      ${output}   status=0
+    Run Keyword Unless      '${status}'=='PASS'             Should Contain      ${output}   No image present
+
+Unmount Image If Not Unmounted
+    [Documentation]     Unmounts the image manually if it is not auto-unmounted.
+    ...
+    ...                 1. Checks if any image is mounted by searching for 'SPP' in the output of mount command.
+    ...
+    ...                 2. Extracts the mount point, unmounts it and then deletes the mount directory.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Unmount Image If Not Auto Mounted |
+    ...
+    ...                 *TBD* - This keyword should become part of Umount Iso By Ilo
+    ${connection} =     Get Connection                      sys conn
+    Run Keyword If      '${connection.host}' == 'None'      Open Connection And Log In System
+    Switch Connection   sys conn
+    # The status is used to determine if connection exists
+    ${status} =         Run Keyword And Return Status       Execute Command     mount | grep 'SPP' | wc -l
+    Run Keyword If      ${status} == False                  Open Connection And Log In System
+    ${mounted} =        Execute Command                     mount | grep 'SPP' | wc -l
+    Run Keyword If      '${mounted}' == '0'                 Return From Keyword
+    ${mounted} =        Execute Command                     ${MOUNT_DIR_CMD}
+    Start Command       umount -l ${mounted}
+    Read Command Output
+    Start Command       rm -rf ${mounted}
+    Read Command Output
+
+Kill Process Linux      [Arguments]         ${pid}
+                        [Documentation]     Kills the process with ${pid} on the remote linux computer that is
+                        ...                 already connected using an SSH connection.
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | Kill Process Linux | 2344 |
+                        ...
+                        ...                 *TBD* - Check if process has exited
+                        ...
+                        ...                 *TBD* - Develop a common keyword here to execute any command and move this to
+                        ...                 another keyword library.
+                        Start Command       kill -9 ${pid}
+
+Kill All HPSUM Processes Linux
+    [Documentation]     Kills all the hpsum process on linux computer that is
+    ...                 already connected using an SSH connection.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Kill All HPSUM Processes Linux |
+
+    ${connection} =     Get Connection                  sys conn
+    Run Keyword If      '${connection.host}' == 'None'                      Open Connection And Log In System
+    Switch Connection   sys conn
+    # The status is used to determine if connection exists
+    ${status} =         Run Keyword And Return Status   Execute Command     ${HPSUM_PROCESSES_CMD}
+    Run Keyword If      ${status} == False              Open Connection And Log In System
+    ${process_ids} =    Execute Command                 ${HPSUM_PROCESSES_CMD}
+    @{pids} =           Split String                    ${process_ids}
+    : FOR               ${pid}                          IN                  @{pids}
+    \                   Start Command                   kill -9 ${pid}
+
+Get Mount Point     [Arguments]         ${TIMEOUT}
+                    [Documentation]     Returns the mount point of the SPP Image.
+                    ...
+                    ...                 ${TIMEOUT} is specified in seconds.
+                    ...
+                    ...                 1. Waits until ${TIMEOUT} for mount command to show up the SPP image
+                    ...
+                    ...                 2. Waits for 60s until the file hpsum can be read using the mount point.
+                    ...
+                    ...                 3. Returns the mount point.
+                    ...
+                    ...                 Example:
+                    ...
+                    ...                 | Get Mount Point | 30 |
+                    : FOR               ${index}                    IN RANGE            1               ${TIMEOUT}
+                    \                   Sleep                       1s
+                    \                   ${mount_dir} =              Execute Command     ${MOUNT_DIR_CMD}
+                    \                   @{lines} =                  Split To Lines      ${mount_dir}    0
+                    \                   ${line_count} =             Get Length          ${lines}
+                    \                   Run Keyword If              ${line_count} < 1   Continue For Loop
+                    \                   ${mount_dir} =              Get From List       ${lines}        0
+                    \                   Sleep                       10s
+                    \                   Exit For Loop
+                    Should Be True      'SPP' in '${mount_dir}'     SPP Image Not Mounted
+                    Wait Until Keyword Succeeds                     60s                 2s
+                    ...                 SSHLibrary.File Should Exist
+                    ...                 ${mount_dir}/hp/swpackages/hpsum
+                    [Return]            ${mount_dir}
+
+Create Hpsum Command Linux      [Arguments]     ${HPSUM_DIR}    ${MOUNT_DIR}
+    [Documentation]             Returns the complete path to the directory where hpsum script can be found.
+    ...
+    ...                         ${HPSUM_DIR} - Relative path where hpsum script can be found
+    ...
+    ...                         ${MOUNT_DIR} - SPP mount point.
+    ...
+    ...                         Concatenates the ${MOUNT_DIR} with ${HPSUM_DIR}.
+    ...
+    ...                         Example:
+    ...
+    ...                         | Create Hpsum Command Linux | /hp/swpackages/ | /root/media/SPP/ |
+    ...
+    ...                         *TBD* - This keyword is to be removed and use string replacement instead.
+    ${hpsum_path} =             Catenate        SEPARATOR=      ${MOUNT_DIR}    ${HPSUM_DIR.strip()}
+    [Return]                    ${hpsum_path}
+
+Start Hpsum On Linux    [Arguments]                 ${hpsum_cmd}                ${hpsum_timeout}    ${hpsum_path}
+                        [Documentation]             Starts Hpsum on linux and returns immediately.
+                        ...
+                        ...                         ${hpsum_cmd} - hpsum command to be executed on the remote computer.
+                        ...
+                        ...                         ${hpsum_timeout} - Maximum time to wait until HPSUM starts successfully in seconds.
+                        ...
+                        ...                         ${hpsum_path} - Absolute path to the directory where hpsum script can be found.
+                        ...
+                        ...                         1. Starts hpsum command.
+                        ...
+                        ...                         2. Waits until message 'SUM engine is now running' appears on the console.
+                        ...
+                        ...                         Example:
+                        ...
+                        ...                         | Start Hpsum On Linux | hpsum | 60 | /root/media/SPP/hp/swpackages |
+                        ...
+                        ...                         *TBD* - This keyword should be merged with Execute Linux Command And Wait and
+                        ...                         a common keyword has to be developed.
+                        Write                       cd ${hpsum_path}
+                        Set Client Configuration    ${hpsum_timeout} seconds    prompt=#
+                        ${output} =                 Read Until Prompt
+                        Write                       ${hpsum_path}/${hpsum_cmd}
+                        ${output} =                 Read Until                  SUM engine is now running
+                        Log                         ${output}
+                        ${hpsum_service_pid} =      Execute Command             ${HPSUM_SERVICE_CMD}
+                        [Return]                    ${hpsum_service_pid}
+
+Execute Linux Command And Wait                          [Arguments]     ${COMMAND}      ${TIMEOUT}      ${CWD}=.
+    [Documentation]             Starts Hpsum on linux and waits until it exits or ${TIMEOUT} occurs.
+    ...
+    ...                         ${COMMAND} - hpsum command to be executed on the remote computer.
+    ...
+    ...                         ${TIMEOUT} - Maximum time to wait until HPSUM starts successfully in seconds.
+    ...
+    ...                         ${CWD} - Optional - Directory where the ${COMMAND} can be found.
+    ...
+    ...                         1. Starts hpsum command.
+    ...
+    ...                         2. Waits until prompt appears on the console.
+    ...
+    ...                         Example:
+    ...
+    ...                         | Execute Linux Command And Wait | hpsum | 60 | /root/media/SPP/hp/swpackages |
+    ...
+    ...                         *TBD* - This keyword should be removed and merged with Start Hpsum On Linux
+    Write                       cd ${CWD}
+    Set Client Configuration    ${COMMAND_TIMEOUT} seconds              prompt=#
+    ${stdout} =                 Read Until Prompt
+    Write                       ${COMMAND}
+    Set Client Configuration    ${TIMEOUT} seconds      prompt=#
+    ${stdout} =                 Read Until Prompt
+    Should Not Contain          ${stdout}               No such file or directory
+    [Return]                    ${stdout}
+
+Reboot Linux
+    [Documentation]     Reboot the remote linux.
+    ...
+    ...                 Sends the "reboot" command to the remote computer.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Reboot Linux |
+    ...
+    ...                 *TBD* - Develop a common keyword here to execute any command and move this to
+    ...                 another keyword library.
+    Sleep               5s
+    Write               reboot
+
+Normalize Status    [Arguments]         ${keyword}
+                    [Documentation]     Used by keyword Wait For System Shutdown Linux and Wait For Remote System Shutdown Linux
+                    ${list_var} =       Create List
+                    : FOR               ${index}            IN RANGE                1   4
+                    \                   ${status}           ${ret} =                Run Keyword And Ignore Error    ${keyword}
+                    \                   Append To List      ${list_var}             ${status}
+                    ${count} =          Get Count           ${list_var}             FAIL
+                    Run Keyword If      '${count}' >= '2'   Return From Keyword     FAIL
+                    [Return]            PASS
+
+Wait For System Shutdown Linux                      [Arguments]                 ${timeout}
+    [Documentation]     Waits for Linux system to shutdown until ${timeout} occurs.
+    ...
+    ...                 This keyword has to be used only followed by "Reboot Linux"
+    ...
+    ...                 Example:
+    ...
+    ...                 | Wait For System Shutdown Linux | 60 |
+    ...
+    ...                 *TBD* - This keyword has to be removed and a generic keyword to be developed
+    ...                 that accepts the IP address of the computer.
+    : FOR               ${index}                    IN RANGE                    1   ${timeout}
+    \                   Sleep                       1s
+    \                   ${ret_value} =              Normalize Status            Open Connection And Log In System
+    \                   Run Keyword If              '${ret_value}' == 'PASS'    Continue For Loop
+    \                   Return From Keyword         True
+    Run Keyword If      '${ret_value}' == 'PASS'    Log                         'System did not shutdown'   WARN
+
+Wait For System Restart Linux                   [Arguments]     ${timeout}
+    [Documentation]     Waits for Linux system to start until ${timeout} occurs.
+    ...
+    ...                 This keyword has to be used only followed by "Wait For System Shutdown Linux"
+    ...
+    ...                 Example:
+    ...
+    ...                 | Wait For System Restart Linux | 60 |
+    ...
+    ...                 *TBD* - This keyword has to be removed and a generic keyword to be developed
+    ...                 that accepts the IP address of the computer.
+    : FOR               ${index}                IN RANGE        1   ${timeout}
+    \                   Sleep                   1s
+    \                   ${status}               ${ret} =        Run Keyword And Ignore Error
+    \                   ...                     Open Connection And Log In System
+    \                   Exit For Loop If        '${status}' == 'PASS'
+    Should Be True      '${status}' == 'PASS'   System did not restart
+    Sleep               30s
+
+Wait For System Shutdown Windows                [Arguments]             ${timeout}      ${IP}=${SYSTEM_IP}
+    ...                                         ${USERNAME}=${SYSTEM_USERNAME}          ${PASSWORD}=${SYSTEM_PASSWORD}
+    [Documentation]             Wait For Windows System to Shutdown
+    ...
+    ...                         ${timeout} - Time out for system shutdown
+    ...
+    ...                         ${IP} - Optional Argument | Default : System IP |
+    ...
+    ...                         ${USERNAME} - Optional Argument | Default : System Username |
+    ...
+    ...                         ${PASSWORD} - Optional Argument | Default : System Password |
+    ...                         Example:
+    ...                         | Wait For System Shutdown Windows | 100
+    : FOR               ${index}                IN RANGE                1               ${timeout}
+    \                   Sleep                   1s
+    \                   ${status}               ${ret} =                Run Keyword And Ignore Error
+    \                   ...                     Connect Windows         ${IP}    ${USERNAME}
+    \                   ...                     ${PASSWORD}
+    \                   Run Keyword If          '${status}' == 'PASS'   Continue For Loop
+    \                   Return From Keyword     True
+    Run Keyword If      '${status}' == 'PASS'   Log                     'System did not shutdown'   WARN
+
+Wait For System Restart Windows                 [Arguments]             ${timeout}      ${IP}=${SYSTEM_IP}
+    ...                                         ${USERNAME}=${SYSTEM_USERNAME}          ${PASSWORD}=${SYSTEM_PASSWORD}
+    [Documentation]             Wait For Windows System to Restart
+    ...
+    ...                         ${timeout} - Time out for system restart
+    ...
+    ...                         ${IP} - Optional Argument | Default : System IP |
+    ...
+    ...                         ${USERNAME} - Optional Argument | Default : System Username |
+    ...
+    ...                         ${PASSWORD} - Optional Argument | Default : System Password |
+    ...                         Example:
+    ...                         | Wait For System Restart Windows | 100
+    : FOR               ${index}                IN RANGE            1               ${timeout}
+    \                   Sleep                   1s
+    \                   ${status}               ${ret} =            Run Keyword And Ignore Error
+    \                   ...                     Connect Windows     ${IP}    ${USERNAME}      ${PASSWORD}
+    \                   Exit For Loop If        '${status}' == 'PASS'
+    Should Be True      '${status}' == 'PASS'   System did not restart
+    Sleep               30s
+
+Wait For Remote System Shutdown Linux               [Arguments]                 ${timeout}
+    [Documentation]     Waits for Remote Linux computer to shutdown until ${timeout} occurs.
+    ...
+    ...                 This keyword has to be used only followed by remote server shutdown.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Wait For Remote System Shutdown Linux | 60 |
+    ...
+    ...                 *TBD* - This keyword has to be removed and a generic keyword to be developed
+    ...                 that accepts the IP address of the computer.
+    : FOR               ${index}                    IN RANGE                    1   ${timeout}
+    \                   Sleep                       1s
+    \                   ${ret_value} =              Normalize Status            Open Connection And Log In Remote System
+    \                   Run Keyword If              '${ret_value}' == 'PASS'    Close All Connections
+    \                   Run Keyword If              '${ret_value}' == 'PASS'    Continue For Loop
+    \                   Return From Keyword         True
+    Run Keyword If      '${ret_value}' == 'PASS'    Log                         'System did not shutdown'   WARN
+
+Wait For Remote System Restart Linux            [Arguments]             ${timeout}
+    [Documentation]     Waits for Remote Linux computer to start until ${timeout} occurs.
+    ...
+    ...                 This keyword has to be used only followed by "Wait For Remote System Shutdown Linux"
+    ...
+    ...                 Example:
+    ...
+    ...                 | Wait For Remote System Restart Linux | 60 |
+    ...
+    ...                 *TBD* - This keyword has to be removed and a generic keyword to be developed
+    ...                 that accepts the IP address of the computer.
+    : FOR               ${index}                IN RANGE                1   ${timeout}
+    \                   Sleep                   1s
+    \                   ${status}               ${ret} =                Run Keyword And Ignore Error
+    \                   ...                     Open Connection And Log In Remote System
+    \                   Run Keyword If          '${status}' == 'FAIL'   Close All Connections
+    \                   Exit For Loop If        '${status}' == 'PASS'
+    Should Be True      '${status}' == 'PASS'   System did not restart
+    Sleep               30s
+
+Remount Image If Unmounted Linux
+    [Documentation]             Remount image if it has been unmounted.
+    ...
+    ...                         1. Check if image is mounted by executing the mount command.
+    ...
+    ...                         2. If the SPP image is not mounted mount ISO by ILO.
+    ...
+    ...                         3. Manually mount if not auto-mounted.
+    ...
+    ...                         Example:
+    ...
+    ...                         | Remount Image If Unmounted Linux |
+    Write                       ${MOUNT_DIR_CMD}
+    Set Client Configuration    ${COMMAND_TIMEOUT} seconds                      prompt=#
+    ${mount_dir}=               Read Until Prompt
+    ${line} =                   Get Line                    ${mount_dir}        0
+    Run Keyword If              'SPP' not in '${line}'      Wait Until Keyword Succeeds     60s     2s
+    ...                         Open Connection And Log In Ilo
+    Run Keyword If              'SPP' not in '${line}'      Mount Iso By Ilo    ${IMAGE_LOCATION}
+    Run Keyword If              'SPP' not in '${line}'      Open Connection And Log In System
+    Mount Image If Not Auto Mounted                         ${IMAGE_LOCATION}
+
+Create Log Directory Structure                  [Arguments]     ${LOG_PATH}
+    [Documentation]     Creates the log folders needed to save the log files from SUT and also checks its existence.
+    ...
+    ...                 ${LOG_PATH} - Directory to be created inside Logs/${SUITE NAME}.
+    ...
+    ...                 The following directories are created:
+    ...
+    ...                 Logs
+    ...
+    ...                 Logs/${SUITE NAME}
+    ...
+    ...                 Logs/${SUITE NAME}/${LOG_PATH}/ScreenShots
+    ...
+    ...                 Logs/${SUITE NAME}/${LOG_PATH}/Failure_ScreenShots
+    ...
+    ...                 Example:
+    ...
+    ...                 | Create Log Directory Structure | Install_SPP_(Silent_with_Force)_on_Windows_2015_05_25_15_13_57 |
+    OperatingSystem.Create Directory            Logs
+    OperatingSystem.Create Directory            Logs/${SUITE NAME}
+    OperatingSystem.Create Directory            Logs/${SUITE NAME}/${LOG_PATH}
+    OperatingSystem.Directory Should Exist      Logs/${SUITE NAME}/${LOG_PATH}
+    OperatingSystem.Create Directory            Logs/${SUITE NAME}/${LOG_PATH}/ScreenShots
+    OperatingSystem.Directory Should Exist      Logs/${SUITE NAME}/${LOG_PATH}/ScreenShots
+    OperatingSystem.Create Directory            Logs/${SUITE NAME}/${LOG_PATH}/Failure_ScreenShots
+    OperatingSystem.Directory Should Exist      Logs/${SUITE NAME}/${LOG_PATH}/Failure_ScreenShots
+    [Return]            Logs/${SUITE NAME}/${LOG_PATH}
+
+Clean Logs Linux
+    [Documentation]     Deletes the log files from the remote linux SUT.
+    ...
+    ...                 Following files are deleted from SUT:
+    ...
+    ...                 /var/cpq/
+    ...
+    ...                 /var/hp/
+    ...
+    ...                 /tmp/HPSUM/
+    ...
+    ...                 /tmp/hpsum*
+    ...
+    ...                 /tmp/temp/HPSUM_Logs*
+    ...
+    ...                 Example:
+    ...
+    ...                 | Clean Logs Linux |
+    Run Keyword And Ignore Error    Execute Linux Command And Wait
+    ...                 rm -rf /var/cpq/ /var/hp/ /tmp/HPSUM* /tmp/temp* /tmp/localhpsum* /tmp/hpsum* /tmp/HPSUM_Logs*
+    ...                 ${COMMAND_TIMEOUT}
+
+Remove Deploy Preview Report
+    [Documentation]     Deletes the log files from the remote linux SUT.
+    ...
+    ...                 Following files are deleted from SUT:
+    ...
+    ...                 /var/hp/
+    ...                 | Remove Deploy Preview Report |
+    Run Keyword And Ignore Error    Execute Linux Command And Wait      rm -rf /var/hp/     ${COMMAND_TIMEOUT}
+
+Move Log Files To Temp Directory Linux      [Arguments]                         ${LOG_LOCATION}
+    [Documentation]     Moves the following files to temporary location on linux SUT.
+    ...
+    ...                 HPSUM_Logs_*.tar.gz
+    ...
+    ...                 /tmp/HPSUM
+    ...
+    ...                 /var/hp/
+    ...
+    ...                 /tmp/HPSUM/
+    ...
+    ...                 HPSUM_InstallDetails.xml
+    ...
+    ...                 hpsum_detail_log.txt
+    ...
+    ...                 hpsum_log.txt
+    ...
+    ...                 Example:
+    ...
+    ...                 | Move Log Files To Temp Directory Linux | localhost |
+    ${output} =         Execute Linux Command And Wait                          cd /tmp/    ${COMMAND_TIMEOUT}
+    Should Contain      ${output}           tmp
+    Execute Linux Command And Wait          mkdir temp                          ${COMMAND_TIMEOUT}
+    SSHLibrary.Directory Should Exist       /tmp/temp
+    Run Keyword And Ignore Error            Execute Linux Command And Wait      mv -f HPSUM_Logs_*.tar.gz temp/
+    ...                 ${COMMAND_TIMEOUT}
+    Run Keyword And Ignore Error            Execute Linux Command And Wait      mv -f /tmp/HPSUM temp/
+    ...                 ${COMMAND_TIMEOUT}
+    Run Keyword And Ignore Error            Execute Linux Command And Wait      cd /var/hp/log/${LOG_LOCATION}/
+    ...                 ${COMMAND_TIMEOUT}
+    Run Keyword And Ignore Error            Execute Linux Command And Wait
+    ...                 mv -f HPSUM_InstallDetails.xml hpsum_detail_log.txt hpsum_log.txt /tmp/temp/
+    ...                 ${COMMAND_TIMEOUT}
+    Run Keyword And Ignore Error            Execute Linux Command And Wait      rm -rf /var/hp/log/HPSUM_deploy_preview*.html
+    ...                 ${COMMAND_TIMEOUT}
+
+Create Test Case Log Folder Name                [Arguments]     ${SYSTEM_TIME}
+    [Documentation]         Returns the name for the folder to store the logs using the system time,
+    ...                     in the format Install_SPP_(Silent_with_Force)_on_Windows_2015_05_25_15_13_57
+    ...
+    ...                     Example:
+    ...
+    ...                     | Create Test Case Log Folder Name | 2015-05-25 15:13:57 |
+    ${test_case_name} =     Replace String      ${TEST_NAME}    ${SPACE}            _
+    ${day}                  ${time} =           Split String    ${SYSTEM_TIME}
+    ${day} =                Replace String      ${day}          -                   _
+    ${time} =               Replace String      ${time}         :                   _
+    ${log_folder} =         Catenate            SEPARATOR=_     ${test_case_name}   ${day}      ${time}
+    [Return]                ${log_folder}
+
+L2W Log Collections     [Arguments]             ${LOG_PATH}                 ${LOG_LOCATION}
+                        [Documentation]         Copies the following files from Linux Server to Windows RG Server.
+                        ...
+                        ...                     ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                        ...
+                        ...                     ${LOG_LOCATION} - Log location on the Linux server.
+                        ...
+                        ...                     HPSUM_InstallDetails.xml - If not generated the keyword will give warning
+                        ...
+                        ...                     hpsum_detail_log.txt
+                        ...
+                        ...                     hpsum_log.txt
+                        ...
+                        ...                     Example:
+                        ...
+                        ...                     | L2W Log Collections | Logs/${SUITE NAME}/${LOG_PATH} | localhost |
+                        ${status}               Run Keyword And Return Status             SSHLibrary.File Should Exist         
+                        ...                     /var/hp/log/${LOG_LOCATION}/HPSUM_InstallDetails.xml
+                        Run Keyword If          'True' in '${status}'       SSHLibrary.Get File
+                        ...                     /var/hp/log/${LOG_LOCATION}/HPSUM_InstallDetails.xml    .\\
+                        Run Keyword If          'True' in '${status}'       Move File               
+                        ...                     HPSUM_InstallDetails.xml    ${LOG_PATH}
+                        Run Keyword If          'True' not in '${status}'      Log         
+                        ...                     "HPSUM_InstallDetails.xml is not generated"    WARN
+                        SSHLibrary.Get File     /var/hp/log/${LOG_LOCATION}/hpsum_detail_log.txt        .\\
+                        Move File               hpsum_detail_log.txt        ${LOG_PATH}
+                        SSHLibrary.Get File     /var/hp/log/${LOG_LOCATION}/hpsum_log.txt               .\\
+                        Move File               hpsum_log.txt               ${LOG_PATH}
+
+W2W Log Collections     [Arguments]         ${LOG_PATH}     ${LOG_LOCATION}
+                        [Documentation]     Copies the following files from Windows Server to Windows RG Server.
+                        ...
+                        ...                 ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                        ...
+                        ...                 ${LOG_LOCATION} - Log location on the Windows server.
+                        ...
+                        ...                 HPSUM_InstallDetails.xml - If not generated the keyword will give warning
+                        ...
+                        ...                 hpsum_detail_log.txt
+                        ...
+                        ...                 hpsum_log.txt
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | W2W Log Collections | Logs/${SUITE NAME}/${LOG_PATH} | localhost |
+                        Wait Until File Is Created          C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\hpsum_detail_log.txt
+                        ...                 30
+                        W2W_Copy            C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\hpsum_detail_log.txt
+                        ...                 .\\${LOG_PATH}
+                        Wait Until File Is Created          C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\hpsum_log.txt
+                        ...                 30
+                        W2W_Copy            C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\hpsum_log.txt
+                        ...                 .\\${LOG_PATH}
+                        ${status}           Run Keyword And Return Status       Wait Until File Is Created          
+                        ...                 C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\HPSUM_InstallDetails.xml
+                        ...                 30
+                        Run Keyword If      'True' in '${status}'               W2W_Copy            
+                        ...                 C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\HPSUM_InstallDetails.xml
+                        ...                 .\\${LOG_PATH}
+                        Run Keyword If      'True' not in '${status}'      Log         "HPSUM_InstallDetails.xml is not generated"    WARN
+
+Execute Gatherlogs And Copy Windows         [Arguments]     ${mount_drive}      ${log_path}
+    [Documentation]     Executes gatherlogs.bat on the Windows server and copies gatherlogs zip file to the RG server.
+    ...
+    ...                 1. Waits until the gatherlogs.bat file becomes readable after mounting the SPP image.
+    ...
+    ...                 2. Copies the enter.txt file from the RG server to the Windows server.
+    ...
+    ...                 3. Executes the gatherlogs.bat file on the remote server.
+    ...
+    ...                 4. Waits until the gatherlogs zip file gets created and copies it back to RG server.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Execute Gatherlogs And Copy Windows | D: | Logs/${SUITE NAME}/${LOG_PATH} |
+    Wait Until File Is Created              ${mount_drive}\\hp\\swpackages\\gatherlogs.bat
+    ...                 30
+    ${RG_ROOT} =        Get RG Root
+    W2W_Copy            ${RG_ROOT}\\tests\\spp\\resource\\enter.txt
+    ...                 C:\\Users\\${SYSTEM_USERNAME}\\AppData\\Local\\Temp\\   True
+    ${command}=         Construct Command   ${COMMAND_GATHERLOGS_WINDOWS}
+    ...                 ${mount_drive}
+    Execute Windows Command And Wait        ${command}      ${HPSUM_TIMEOUT}
+    ...                 ${mount_drive}
+    : FOR               ${index}            IN RANGE        1                   30
+    \                   Sleep               10s
+    \                   W2W_Copy            C:\\Users\\${SYSTEM_USERNAME}\\AppData\\Local\\Temp\\HPSUM_Logs_*.zip
+    \                   ...                 .\\
+    \                   ${status}           ${ret} =        Run Keyword And Ignore Error    OperatingSystem.File Should Exist
+    \                   ...                 .\\HPSUM_Logs_*.zip
+    \                   Exit For Loop If    '${status}' == 'PASS'
+    Move Files          HPSUM_Logs_*.zip    ${log_path}
+
+Execute Gatherlogs And Copy Linux               [Arguments]                 ${mount_dir}    ${log_path}
+    [Documentation]     Executes gatherlogs.sh on the Linux server and copies gatherlogs tar.gz file to the RG server.
+    ...
+    ...                 1. Waits until the gatherlogs.sh file becomes readable after mounting the SPP image.
+    ...
+    ...                 2. Copies the enter.txt file from the RG server to the Linux server.
+    ...
+    ...                 3. Executes the gatherlogs.sh file on the remote server.
+    ...
+    ...                 4. Waits until the gatherlogs tar.gz file gets created and copies it back to RG server.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Execute Gatherlogs And Copy Linux | /mnt/media/ | Logs/${SUITE NAME}/${LOG_PATH} |
+    Wait Until Keyword Succeeds                 60s                         2s
+    ...                 SSHLibrary.File Should Exist                        ${mount_dir}/hp/swpackages/gatherlogs.sh
+    ${hpsum_path}=      Create Hpsum Command Linux                          ${HPSUM_DIR_LINUX}
+    ...                 ${mount_dir}
+    Execute Linux Command And Wait              ${COMMAND_GATHERLOGS_LINUX}
+    ...                 ${GATHERLOGS_TIMEOUT}   ${hpsum_path}
+    : FOR               ${index}                IN RANGE                    1               30
+    \                   Sleep                   10s
+    \                   SSHLibrary.Get File     /tmp/HPSUM_Logs_*.tar.gz    .\\
+    \                   ${status}               ${ret} =                    Run Keyword And Ignore Error
+    \                   ...                     OperatingSystem.File Should Exist
+    \                   ...                     .\\HPSUM_Logs_*.tar.gz
+    \                   Exit For Loop If        '${status}' == 'PASS'
+    Move Files          HPSUM_Logs_*.tar.gz     ${log_path}
+
+Get Components Status   [Arguments]             ${XML}
+                        [Documentation]         Parses the XML file and report the errors matching ${ERROR_CODES} defined in the VARIABLES section.
+                        ...
+                        ...                     ${XML} - HPSUM_Details.xml file to be parsed.
+                        ...
+                        ...                     Example:
+                        ...
+                        ...                     | Get Components Status | HPSUM_Details.xml |
+                        ${root} =               Parse XML           ${XML}
+                        Should Be Equal         ${root.tag}         HPSUM_InstallDetails
+                        @{components} =         Get Elements        ${root}             ComponentResults/Component
+                        :FOR                    ${component}        IN                  @{components}
+                        \                       ${component_description} =              Get Element     ${component}
+                        \                       ...                 ComponentDescription
+                        \                       ${result_code} =    Get Element         ${component}    ResultCode
+                        \                       ${component_return_code} =              Get Element     ${component}
+                        \                       ...                 ComponentReturnCode
+                        \                       Log                 ${component_description.text}: ${result_code.text}: ${component_return_code.text}
+                        \                       Run Keyword And Continue On Failure     Should Not Contain
+                        \                       ...                 ${ERROR_CODES}
+                        \                       ...                 ${result_code.text}
+                        \                       ...                 ${component_description.text}: ${result_code.text}: ${component_return_code.text}
+                        \                       ...                 False
+                        ${deploy_status} =      Get Element         ${root}             NodeStatus
+                        Run Keyword And Continue On Failure         Should Not Contain
+                        \                       ...                 ${deploy_status.text}
+                        \                       ...                 ${DEPLOY_ERROR_MESSAGE}
+                        \                       ...                 ${deploy_status.text}
+                        \                       ...                 False
+
+Get PID     [Arguments]         ${PSEXEC_OUTPUT}
+            [Documentation]     Returns the pid of the started psexec process.
+            ...
+            ...                 ${PSEXEC_OUTPUT} - stdout of the psexec process.
+            ...                 Example:
+            ...
+            ...                 | Get PID | ${PSEXEC_OUTPUT} |
+            ${SPLIT} =          Split To Lines      ${PSEXEC_OUTPUT}        -1
+            Log                 ${SPLIT}
+            ${match}            ${PID} =            Should Match Regexp     ${SPLIT}[0]
+            ...                 .+process ID (\\d+).
+            Log                 ${match}
+            Log                 ${PID}
+            [Return]            ${PID}
+
+Windows HPSUM Log Parsing   [Arguments]     ${LOG_LOCATION}
+    [Documentation]         Parses the file hpsum_detail_log.txt and reports any errors. Used for PIV.
+    ...
+    ...                     ${LOG_LOCATION} - location of the log file. localhost in case of local install and ip address for the remote node install.
+    ...
+    ...                     Example:
+    ...
+    ...                     | Windows HPSUM Log Parsing | localhost |
+    W2W_Copy                C:\\cpqsystem\\hp\\log\\${LOG_LOCATION}\\hpsum_detail_log.txt   .\\
+    Run Keyword And Continue On Failure     Get Component Status Post Installation Windows
+    ...                     hpsum_detail_log.txt
+    OperatingSystem.Remove File             hpsum_detail_log.txt
+
+Get All Event   [Arguments]         ${connection}   ${BASEPATH}
+                [Documentation]     Wrapper for getAllEvents.
+                ...
+                ...                 Creates a html file with the event log viewer information of the remote Windows server.
+                ...
+                ...                 ${connection} - wmi connection object that is returned by the ConnectWindows call.
+                ...
+                ...                 ${BASEPATH} - Path on the RG server where the event log viewer html file is to be saved.
+                ...                 Example:
+                ...
+                ...                 | Get All Event | <wmi_connection_object> | \Logs\win piv\Install_SPP_(Silent_with_Force)_on_Windows_2015_05_25_15_13_57 |
+                ${ret} =            getAllEvents    ${connection}   ${BASEPATH}
+
+Execute Locfg Utility   [Arguments]         ${script}
+                        [Documentation]     move selenium file to ilo memory BLOB.
+                        ...
+                        ...                 ${script} - Selenium file path with file name.
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | Execute Locfg Utility | C:\\dev\\spp\\tests\\spp\\resource\\spp_offline_selenium.py |
+                        Execute Locfg Utility Wrapper   ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}     ${BLOB}
+                        ...                 ${script}
+                        ...                 ${STRAWBERRY_PERL}
+                        ...                 ${LOCFG_UTILITY}
+
+Change Boot Order To USB
+    [Documentation]     Change server boot order to USB one time using RIBCL script.
+    ...
+    ...                 No parameters.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Change Boot Order To USB | No parameters |
+    Write By RIBCL      ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}     ${CHANGE_BOOTORDER_TO_USB}      ${STRAWBERRY_PERL}
+    ...                 ${LOCFG_UTILITY}
+
+Change Boot Order To CDROM
+    [Documentation]     Change server boot order to CDROM using RIBCL script.
+    ...
+    ...                 No parameters.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Change Boot Order To CDROM | No parameters |
+    Write By RIBCL      ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}     ${CHANGE_BOOTORDER_TO_CDROM}      ${STRAWBERRY_PERL}
+    ...                 ${LOCFG_UTILITY}
+
+Change Boot Order To HDD
+    [Documentation]     Change server boot order to HDD using RIBCL script.
+    ...
+    ...                 No parameters.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Change Boot Order To HDD | No parameters |
+    Write By RIBCL      ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}     ${CHANGE_BOOTORDER_TO_HDD}      ${STRAWBERRY_PERL}
+    ...                 ${LOCFG_UTILITY}
+
+Cold Reboot Server
+    [Documentation]     Reboot server using RIBCL script.
+    ...
+    ...                 No parameters.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Cold Reboot Server | No parameters |
+    Write By RIBCL      ${ILO_IP}   ${ILO_USERNAME}     ${ILO_PASSWORD}     ${COLD_REBOOT}      ${STRAWBERRY_PERL}
+    ...                 ${LOCFG_UTILITY}
+
+Preview Report Check    [arguments]         ${LOG_PATH}         ${os_type}                      ${RUN_COUNT}
+                        [Documentation]     Check Deploy Preview Report is generated or not
+                        ...
+                        ...                 ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                        ...
+                        ...                 ${RUN_COUNT} - HPSUM Deploy Run Count
+                        ...
+                        ...                 Example:
+                        ...                 | Preview Report Check | Logs /${SUITE NAME} /${LOG_PATH} | Windows / Linux | First Run
+                        :FOR                ${index}            IN RANGE                        1   30
+                        \                   Sleep               2s
+                        \                   Run Keyword if      '${os_type}' == 'Windows'       W2W_Copy
+                        \                   ...                 C:\\cpqsystem\\hp\\log\\HPSUM_deploy_preview_Report_*\\HPSUM_deploy_preview_Report_*.html
+                        \                   ...                 .\\
+                        \                   Run Keyword if      '${os_type}' == 'Linux'
+                        \                   ...                 Run Keyword And Ignore Error    SSHLibrary.Get File
+                        \                   ...                 /var/hp/log/HPSUM_deploy_preview_Report_*.html
+                        \                   ...                 .\\
+                        \                   Run Keyword And Ignore Error                        Move File
+                        \                   ...                 .\\HPSUM_deploy_preview*.html
+                        \                   ...                 ${LOG_PATH}\\${RUN_COUNT}_HPSUM_deploy_preview_Report.html
+                        \                   ${TCOUNT} =         Count Files In Directory        ${LOG_PATH}
+                        \                   ...                 ${RUN_COUNT}_HPSUM_deploy_preview_Report.html
+                        \                   Exit For Loop If    '${TCOUNT}' == '1'
+                        Run Keyword if      ${TCOUNT} == 0      Log
+                        ...                 ${RUN_COUNT} HPSUM deploy preview Report is not generated
+                        ...                 WARN
+
+Execute HPSUM   [Arguments]                 ${SYSTEM_OS}    ${LOG_LOCATION}    ${HPSUM_COMMAND}    ${HPSUM_TIMEOUT}    ${HPSUM_PATH}=.
+                [Documentation]             Execute HPSUM And Give Live HPSUM Log
+                ...
+                ...                         ${SYSTEM_OS} - Server OS
+                ...
+                ...                         ${LOG_LOCATION} - location of the log file. localhost in case of local install and ip address for the remote node install.
+                ...
+                ...                         ${HPSUM_COMMAND} - hpsum command to be exicute
+                ...
+                ...                         ${HPSUM_TIMEOUT} - Time out for hpsum
+                ...
+                ...                         ${HPSUM_PATH} - Optional Argument which have the path of hpsum for linux
+                ...
+                ...                         Example:
+                ...                         | Execute HPSUM | Linux | localhost | HPSUM Command | 60 | /root/media/SPP/hp/swpackages
+                ${RG_ROOT} =                Get RG Root
+                ${handle} =                 Start Process       python
+                ...                         ${RG_ROOT}\\tests\\spp\\resource\\baseline_inventory_deploy.py
+                ...                         ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                ...                         ${SYSTEM_OS}        ${LOG_LOCATION}
+                ...                         stderr=stderr.txt   stdout=stdout.txt       alias=myproc
+                Run keyword If              '${SYSTEM_OS}' == 'Linux'    Execute Linux Command And Wait
+                ...                         ${HPSUM_COMMAND}        ${HPSUM_TIMEOUT}    ${HPSUM_PATH}
+                ${PSEXEC_OUTPUT}=           Run keyword If          '${SYSTEM_OS}' == 'Windows'        Run
+                ...                         ${HPSUM_COMMAND}
+                ${PID} =                    Run keyword If          '${SYSTEM_OS}' == 'Windows'         Get PID             ${PSEXEC_OUTPUT}
+                Run keyword If              '${SYSTEM_OS}' == 'Windows'      Wait for PSEXEC Process    ${HPSUM_TIMEOUT}    ${PID}
+                ${result} =                 Wait For Process    myproc
+                Process Should Be Stopped   myproc
+
+Move Extra Logs    [Arguments]              ${LOG_PATH}
+                   [Documentation]          Move HPSUM_Live.log, stdout.txt, stderr.txt to LOG_PATH.
+                   ...
+                   ...                      ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                   ...
+                   ...                      Example:
+                   ...
+                   ...                      | Move Extra Logs | Logs /${SUITE NAME} /${LOG_PATH}
+                                            Run Keyword And Ignore Error        Move Files
+                   ...                      .\\HPSUM_Live.log    .\\stdout.txt    .\\stderr.txt    ${LOG_PATH}
+
+AutoKeyClick            [Arguments]         ${RG_ROOT}          ${TP_DIR}
+                        [Documentation]     Start AutoKeyClick.exe on the Windows SUT to click on install button of the pop up.
+                        ...
+                        ...                 ${RG_ROOT} - Directory of the RG
+                        ...
+                        ...                 ${TP_DIR} -  Temporary Directory to copy AutoKeyClick.exe on the SUT                        
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | AutoKeyClick | dev/spp/tests/spp | spp_automation_setup
+                        Connect Windows     ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                        W2W_Copy            ${RG_ROOT}\\tests\\spp\\resource\\softwares\\AutoKeyClick.exe
+                        ...                 ${TP_DIR}           True
+                        ${COMMAND} =        Construct Command   ${KEYCLICK}
+                        ...                 ${SYSTEM_IP}
+                        ...                 ${SYSTEM_USERNAME}
+                        ...                 ${SYSTEM_PASSWORD}
+                        ...                 ${TP_DIR}\\AutoKeyClick.exe
+                        ${b} =              Run                 ${COMMAND}
+
+Install Certificates    [Arguments]         ${LOG_PATH}             ${TP_DIR}
+                        [Documentation]     Install certificates present in ${Cert_DIR} directory on SUT.
+                        ...
+                        ...                 ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                        ...
+                        ...                 ${TP_DIR} -  Temporary Directory to copy certificates on the SUT
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | Install Certificates | Logs /${SUITE NAME} /${LOG_PATH} | spp_automation_setup
+                        @{DIR_LIST} =       OperatingSystem.List Files In Directory     ${Cert_DIR}
+                        Log Many            @{DIR_LIST}
+                        ${length}           Get Length              ${DIR_LIST}
+                        Log                 ${length}
+                        W2W_Copy            ${Cert_DIR}\\*.cer      ${TP_DIR}           True
+                        :For                ${var}                  IN                  @{DIR_LIST}
+                        \                   Log                     ${var}
+                        \                   ${COMMAND}=             Construct Command   ${COMMAND_INSTALL_CERTIFICATE}
+                        \                   ...                     ${var}
+                        \                   Log                     ${COMMAND}
+                        \                   Execute Windows Command And Wait            ${COMMAND}      10
+                        \                   ...                     ${TP_DIR}
+                        W2W_Copy            ${TP_DIR}\\CertUtil_Out.txt                 .\\${LOG_PATH}
+                        ${file_out} =       Grep File               .\\${LOG_PATH}\\CertUtil_Out.txt
+                        ...                 ${CertUtil_Out}
+                        Log                 ${file_out}
+                        ${Count} =          Get Count               ${file_out}         CertUtil
+                        Log                 ${Count}
+                        Run Keyword If      ${Count} == ${length}   Log                 All certificate Installed Successfully.
+                        ...                 ELSE                    Log
+                        ...                 Some certificates are not installed. Check log for more details.
+                        ...                 WARN
+
+Windows OS Version
+                        [Documentation]     Check and return the OS version and bit for Windows SUT
+                        ...
+                        ...                 No parameters.
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | Windows OS Version | No parameters |
+                        ${COMMAND}=     Construct Command   ${WINDOWS_OS_VERSION}
+                        ...             ${SYSTEM_IP}
+                        ...             ${SYSTEM_USERNAME}
+                        ...             ${SYSTEM_PASSWORD}
+                        ${a}=           Run                 ${COMMAND}
+                        [Return]        ${a}
+
+Disable UAC
+                        [Documentation]     Disable User Account Control on Windows 2008 SUT
+                        ...
+                        ...                 No parameters.
+                        ...
+                        ...                 Example:
+                        ...
+                        ...                 | Disable UAC | No parameters |
+                        Execute Windows Command And Wait     ${DISABLE_UAC}      5
+
+Enable AutoLogOn Windows        [Arguments]         ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                                [Documentation]     Enable Auto Login on Windows SUT
+                                ...
+                                ...                 ${SYSTEM_USERNAME} - Username of the target SUT.
+                                ...
+                                ...                 ${SYSTEM_PASSWORD} - Password of the target SUT.
+                                ...
+                                ...                 Example:
+                                ...
+                                ...                 | Enable AutoLogOn Windows | Administrator | Compaq123
+                                Execute Windows Command And Wait     ${CMD_ENABLE_AUTOLOGON}     5
+                                ${command}=     Construct Command    ${CMD_ADD_AUTO_USERNAME}
+                                ...             ${SYSTEM_USERNAME}
+                                Execute Windows Command And Wait     ${command}                  5
+                                ${command}=     Construct Command    ${CMD_ADD_AUTO_PASSWORD}
+                                ...             ${SYSTEM_PASSWORD}
+                                Execute Windows Command And Wait     ${command}                  5
+
+Parse Deploy Preview Report     [Arguments]         ${LOG_PATH}        ${RUN_COUNT}
+                                [Documentation]     Parses deploy preview report and checks components to install are there or not.
+                                ...
+                                ...                 ${LOG_PATH} - Destination directory on the RG server where the files have to be copied.
+                                ...
+                                ...                 ${RUN_COUNT} -  HPSUM Deploy Run Count
+                                ...
+                                ...                 Example:
+                                ...
+                                ...                 | Parse Deploy Preview Report | Logs /${SUITE NAME} /${LOG_PATH} | First Run
+                                ${status} =       Run Keyword And Return Status        OperatingSystem.File Should Exist
+                                ...               .\\${LOG_PATH}\\${RUN_COUNT}_HPSUM_deploy_preview_Report.html
+                                ${flag} =         Run Keyword If      'True' in '${status}'         HPSUM Deploy Report Check         
+                                ...               ${LOG_PATH}\\${RUN_COUNT}_HPSUM_deploy_preview_Report.html
+                                Run Keyword If    '${RUN_COUNT}' == 'First_Run' and ${flag} == 1         
+                                ...               Log                   "System is already up to date"           WARN
+                                Run Keyword If    '${RUN_COUNT}' == 'Second_Run' and ${flag} == 0 or '${RUN_COUNT}' == 'Third_Run' and ${flag} == 0
+                                ...               Log                   "Not all components are installed successfully. Check ${RUN_COUNT} Deploy Report"
+                                ...               WARN
+
+Execute HPSUM With Livelog Windows      [Arguments]     ${mount_drive}    ${hpsum_command}    ${remote_os_type}
+                                        ${RG_ROOT} =                Get RG Root
+                                        Run Keyword If      '${remote_os_type}' == 'VMWARE'
+                                        ...         Start Process       python
+                                                    ...                 ${RG_ROOT}\\tests\\spp\\resource\\baseline_inventory_deploy.py
+                                                    ...                 ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                                                    ...                 ${SYSTEM_OS}        ${LOG_LOCATION}
+                                                    ...                 stderr=stderr.txt   stdout=stdout.txt       alias=myproc
+                                        Run Keyword If      '${remote_os_type}' == 'LINUX'
+                                        ...         Start Process       python
+                                                    ...                 ${RG_ROOT}\\tests\\spp\\resource\\Win_to_Lin_livelog.py
+                                                    ...                 ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                                                    ...                 ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+                                                    ...                 stderr=stderr.txt   stdout=stdout.txt       alias=myproc
+                                        ${COMMAND}=     Construct Command   ${hpsum_command}    ${mount_drive}      ${REMOTE_NODE_IP}
+                                        ...             ${REMOTE_NODE_USERNAME}
+                                        ...             ${REMOTE_NODE_PASSWORD}
+                                        Execute Windows Command And Wait    ${COMMAND}      ${HPSUM_TIMEOUT}
+                                        ${result} =                 Wait For Process    myproc
+                                        Process Should Be Stopped   myproc
+
+Execute HPSUM With Livelog Linux        [Arguments]         ${mount_dir}    ${hpsum_command}    ${remote_os_type}
+                                        ${RG_ROOT} =        Get RG Root
+                                        ${hpsum_path}=      Create Hpsum Command Linux      ${HPSUM_DIR_LINUX}      ${mount_dir}
+                                        Run Keyword If      '${remote_os_type}' == 'VMWARE'
+                                        ...         Start Process       python
+                                                    ...                 ${RG_ROOT}\\tests\\spp\\resource\\baseline_inventory_deploy.py
+                                                    ...                 ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                                                    ...                 ${SYSTEM_OS}        ${LOG_LOCATION}
+                                                    ...                 stderr=stderr.txt   stdout=stdout.txt       alias=myproc
+                                        Run Keyword If      '${remote_os_type}' == 'LINUX'
+                                        ...         Start Process       python
+                                                    ...                 ${RG_ROOT}\\tests\\spp\\resource\\Lin_to_Lin_livelog.py
+                                                    ...                 ${SYSTEM_IP}        ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+                                                    ...                 ${REMOTE_NODE_IP}   ${REMOTE_NODE_USERNAME}     ${REMOTE_NODE_PASSWORD}
+                                                    ...                 stderr=stderr.txt   stdout=stdout.txt       alias=myproc
+                                        ${COMMAND} =        Construct Command               ${COMMAND_HPSUM_LINUX_REMOTE_NODE}
+                                        ...                 ${REMOTE_NODE_IP}
+                                        ...                 ${REMOTE_NODE_USERNAME}
+                                        ...                 ${REMOTE_NODE_PASSWORD}
+                                        Execute Linux Command And Wait                      ${COMMAND}
+                                        ...                 ${HPSUM_TIMEOUT}    ${hpsum_path}
+                                        ${result} =                 Wait For Process    myproc
+                                        Process Should Be Stopped   myproc

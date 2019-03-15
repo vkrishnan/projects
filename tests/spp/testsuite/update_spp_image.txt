@@ -1,0 +1,119 @@
+*** Settings ***
+Documentation   Update SPP Image And Create
+...             = Usage =
+...             pybot -v RG_SYSTEM_USERNAME:<RG_SYSTEM_USERNAME> -v RG_SYSTEM_PASSWORD:<RG_SYSTEM_PASSWORD> -v IMAGE_LOCATION:<IMAGE_LOCATION> update_spp_image.txt
+...             = Variables =
+...             | IMAGE_LOCATION            | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | RG_SYSTEM_USERNAME | Required | RG system login username |
+...             | RG_SYSTEM_PASSWORD | Required | RG system login password |
+...             = prerequisites =
+...             | 1.                        Install 7-Zip on RG server |
+...             = SPP Image Paths =
+...             | Updated SPP image path    |   C:\dev\spp\SppLibrary\resource\updated_spp_image        |
+...             | Downloaded SPP image path |   C:\dev\spp\SppLibrary\resource\downloaded_spp_image     |
+
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Library     SppLibrary/library/create_spp_image.py
+Variables   SppLibrary/config/config.py
+Library     SppLibrary
+Library     Process
+
+
+*** Variables ***
+${OFFLINE_SPP_PATH}     C:\\dev\\spp\\SppLibrary\\resource
+${ISOLINUX_FILE_PATH}   ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\extracted_spp_image\\system\\isolinux.cfg
+${GRUB_FILE_PATH}       ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\extracted_spp_image\\efi\\boot\\grub.cfg
+${SOURCE_LOCATION}      ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\extracted_spp_image\\
+${OUTPUT_LOCATION}      ${OFFLINE_SPP_PATH}\\updated_spp_image\\
+
+
+*** Test Cases ***
+Update SPP Image And Create
+    [Documentation]     Update spp image and create new image with updated files
+
+    ##      Kill HPSUM Process if Already Running
+    Kill Hpsum Process
+
+    ##              Get RG Root
+    ${RG_ROOT} =    Get RG Root
+
+    ##      Create directory for download spp image and update
+    Create Directory Structure
+
+    ##                  Download SPP image using http url
+    Log                 \nDownloading SPP Image             console=True
+    ${DOWNLOAD_FILE}    Download File From Http Server      ${HTTP_IMAGE_PATH}      ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\
+
+    ##                      Extracting downloaded spp image
+    Log                     \nExtracting SPP Image      console=True
+    ${output}               Run
+    ...                     "c:\\Program Files\\7-Zip\\7z.exe" x -y ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\${DOWNLOAD_FILE} -o${OFFLINE_SPP_PATH}\\downloaded_spp_image\\extracted_spp_image\\
+    Should not Contain      ${output}                   c:\\Program     " 7-Zip is not installed on RG server"
+    ...                     values=False
+    Should not Contain      ${output}                   cannot find archive
+    ...                     " Can not find SPP image in ${OFFLINE_SPP_PATH}\\downloaded_spp_image\\${DOWNLOAD_FILE}"
+    ...                     values=False
+    Should Contain          ${output}                   Everything is Ok
+    ...                     "SPP image didn't extracted due to some other issue"
+    ...                     values=False
+
+    ##                          Replace string in isolinux.cfg, grub.cfg and spp_hndlr.sh files.
+    Replace String In Files     ${ISOLINUX_FILE_PATH}
+    Replace String In Files     ${GRUB_FILE_PATH}
+
+    ##          Launch hpsum and create iso image with updated files
+    ${out}      Start Process           ${SOURCE_LOCATION}launch_hpsum.bat
+    Sleep       50
+    Log         \nCrerating SPP Image   console=True
+    ${STATUS}   Create Spp Image        ${SOURCE_LOCATION}      ${OUTPUT_LOCATION}                  ${RG_SYSTEM_USERNAME}
+    ...         ${RG_SYSTEM_PASSWORD}
+    Log         Updated SPP image path is : ${RG_ROOT}\\SppLibrary\\resource\\updated_spp_image     WARN
+
+    ##                  Kill HPSUM Process
+    Kill Hpsum Process
+    Run Keyword If      ${STATUS} != True   Fail    Failed to create SPP image
+    Run Keyword If      ${STATUS} == True   Log     SPP image created successfully      WARN
+
+
+***Keywords***
+Replace String In Files         [Arguments]                 ${FILE_PATH}
+    [Documentation]             Replace string in given file.
+    ...
+    ...                         ${FILE_PATH} - Absolute file path to replace string.
+    ...
+    ...                         Example:
+    ...
+    ...                         | Replace String In File | C:\\squashfs-root\\bin\\spp_hndlr.sh |
+    ...
+    ...                         *TBD* - This keyword is used to replace string in file.
+    ${dict} =                   Create Dictionary
+    ...                         Interactive Firmware = Interactive Firmware_1
+    ...                         Automatic Firmware = Automatic Firmware_2
+    ${temp_file} =              Replace String In File      ${FILE_PATH}    ${dict}
+    ${dict} =                   Create Dictionary
+    ...                         Interactive Firmware_1 = Automatic Firmware
+    ...                         Automatic Firmware_2 = Interactive Firmware
+    ...                         no AUTOREBOOTONSUCCESS\=yes = no
+    ...                         MANUAL AUTOPOWEROFFONSUCCESS\=no = MANUAL AUTOPOWEROFFONSUCCESS\=no AUTOREBOOTONSUCCESS\=yes
+    ${temp_file_1} =            Replace String In File      ${temp_file}    ${dict}
+    OperatingSystem.Move File   ${temp_file_1}              ${FILE_PATH}
+    Remove File                 ${temp_file}
+
+Create Directory Structure
+    [Documentation]     Remove dorectories if already exit and create dorectories for download spp image and update.
+    ...
+    ...                 Example:
+    ...
+    ...                 | Create Directory Structure |
+    Run Keyword And Ignore Error    Remove Directory    ${OFFLINE_SPP_PATH}\\updated_spp_image      recursive=True
+    Run Keyword And Ignore Error    Remove Directory    ${OFFLINE_SPP_PATH}\\downloaded_spp_image   recursive=True
+    Run Keyword And Ignore Error    Remove Directory    C:\\cpqsystem   recursive=True
+    Run Keyword And Ignore Error    Create Directory    ${OFFLINE_SPP_PATH}\\updated_spp_image
+    Run Keyword And Ignore Error    Create Directory    ${OFFLINE_SPP_PATH}\\downloaded_spp_image
+
+Kill Hpsum Process
+    ${PID} =    Kill Hpsum Process RG
+    Log         ${PID}
+    ${output}   Run     taskkill /pid ${PID} /f
+

@@ -1,0 +1,141 @@
+*** Settings ***
+Documentation   Guided SPP Install for Windows
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> -v SIGNATURE_BYPASS:<Signature-bypass> win_guided.txt
+...             = Variables =
+...             | ILO_IP                | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME          | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD          | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP             | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME       | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD       | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH       | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE        | Optional | Virtual, DVD, USB; default _Virtual_ |
+...             | SIGNATURE_BYPASS      | Optional | Bypass pop-up and install components if set to true; default _True_ |
+...             = Prerequisites =
+...             Chrome must be installed and webdriver for chrome must be available in system path
+
+Library     OperatingSystem
+Library     SppLibrary
+Variables   SppLibrary/config/variables.py
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+
+Suite Setup         Close All Connections
+Suite Teardown      Close All Connections
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}             localhost
+${URL}                          https://{{SYSTEM_IP}}:63002
+${SEARCH_HPSUM_SERVICE_CMD}     ps aux | grep 'sum_service' | awk 'NR == 1' | awk '{print $2}'
+
+
+*** Test Cases ***
+Install SPP (Guided) on Windows
+    [Documentation]     Guided HPSUM installation with no options
+    [Tags]              SPP Install
+
+    # Setup ilo and wmi connections, install certificates, disable UAC and reboot
+    Setup Server
+
+    Get HPSUM Version
+
+    Clean Logs Server
+
+    #Run deploy preview 1st time
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    First_Run
+    Parse Deploy Preview Report     First_Run
+
+    Clean Logs Server
+
+    #Run guided installation 1st time
+    ${hpsum_pid} =              Start HPSUM Service
+    ${FIRST_INSTALL_STATUS} =   Run Keyword And Return Status
+    ...                         Start Guided Interactive Installation                       First_Run
+    Copy HPSUM Logs Analyze And Get Gatherlogs      First_Run
+    Run Keyword IF              '${FIRST_INSTALL_STATUS}'=='False'                          Run Keywords
+    ...                         Log                 First run guided installation failed    Error   AND
+    ...                         Fail                First run guided installation failed
+
+    #Reboot server
+    Reboot The Server   First_Run
+
+    Run Keyword And Ignore Error                        OperatingSystem.Move File
+    ...     ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}     ${RG_LOG_PATH}/first_run_${HPSUM_DETAILS_LOG_XML}
+
+    Mount SPP Image
+
+    #Run deploy preview 2nd time
+    Deploy Preview Report   ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    Second_Run
+
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+
+    #Run guided installation 2nd time
+    ${hpsum_pid} =              Start HPSUM Service
+    ${SECOND_INSTALL_STATUS}=   Run Keyword And Return Status
+    ...                         Start Guided Interactive Installation                       Second_Run
+    Copy HPSUM Logs Analyze And Get Gatherlogs      Second_Run
+    Run Keyword IF              '${SECOND_INSTALL_STATUS}'=='False'                         Run Keywords
+    ...                         Log                 Second run guided installation failed   Error   AND
+    ...                         Fail                Second run guided installation failed
+
+    #Reboot server
+    Reboot The Server   Second_Run
+
+    Mount SPP Image
+
+    Move Log Files To Temp Directory
+
+    #Run deploy preview 3rd time
+    SppLibrary.Start Command        cmd.exe /c del /S /Q ${LOGS_WINDOWS_REPORT}\\${DEPLOY_PREVIEW_REPORT}*
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    Third_Run
+    Parse Deploy Preview Report     Third_Run
+
+    [Teardown]      Run Keywords
+    ...             Run Keyword And Ignore Error            SppLibrary.Close Browser
+    ...             AND     Run Keyword And Ignore Error    Kill Process Name   ${HPSUM_SERVICE_NAME}
+    ...             AND     Move Log Files To Temp Directory
+    ...             AND     WinLibrary.Testcase Cleanup
+
+
+*** Keywords ***
+Start HPSUM Service
+    [Documentation]         Start HPSUM Service on SUT
+    ${mounted_drive} =      WinLibrary.Get SPP Mount Point
+    ${command}=             Construct Command   ${COMMAND_HPSUM_START_WINDOWS}      ${mounted_drive}
+    Run Keyword If          '${SIGNATURE_BYPASS}' == 'False'            SppLibrary.Start Command    ${command}
+    ...                     ELSE                Start Command Psexec    ${command}
+    : FOR                   ${index}            IN RANGE                1           300
+    \                       ${HPSUM_PID} =      SppLibrary.get pid      ${HPSUM_SERVICE_NAME}
+    \                       Exit for loop if    ${HPSUM_PID} != None
+    [Return]                ${HPSUM_PID}
+
+Copy HPSUM Logs Analyze And Get Gatherlogs      [Arguments]     ${RUN_COUNT}
+    [Documentation]                     Collects HPSUM install logs and analyze and run gatherlogs command
+    Collect HPSUM Logs                  @{HPSUM_LOG_FILES_WINDOWS}
+    Analyze HPSUM Log                   ${RUN_COUNT}
+    Execute Gatherlogs And Get Log      ${RUN_COUNT}
+
+Start Guided Interactive Installation   [Arguments]     ${RUN_COUNT}
+    [Documentation]                     Guided Install through selenium
+
+    ${MOUNT_DRIVE}=     Get SPP Mount Point
+    ${URL} =            Replace String      ${URL}      {{SYSTEM_IP}}   ${SYSTEM_IP}
+
+    ${STATUS} =     Start Interactive Installation      ${HPSUM_VERSION}    ${SYSTEM_USERNAME}
+    ...             ${SYSTEM_PASSWORD}                  ${RG_LOG_PATH}      ${RUN_COUNT}    ${URL}
+
+    Run Keyword If      '${STATUS}' != 'True'   Fail    Error in interacive installation
+
+    ${STATUS} =     Verify Review Page And Deploy   ${RG_LOG_PATH}      ${RUN_COUNT}
+
+    Run Keyword If      '${STATUS}' != 'True'   Fail    Error in components verify page
+
+Reboot The Server   [Arguments]             ${RUN_COUNT}
+                    #Reboot server and wait untill it starts up
+                    Ilo Set One Time Boot   hdd
+                    ${Reboot_status}=       SppLibrary.Reboot System        ${RUN_COUNT}                ${RG_LOG_PATH}
+                    SppLibrary.Close Browser
+                    Run Keyword If          'True' == '${Reboot_status}'    Wait Until Power Cycle      ${SYSTEM_IP}
+

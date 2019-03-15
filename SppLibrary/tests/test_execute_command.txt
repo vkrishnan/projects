@@ -1,0 +1,14 @@
+*** Settings ***
+Library    SppLibrary.WMILibrary
+Resource   common.txt
+
+*** Variables ***
+${HOSTNAME1}    	172.20.56.183
+${USERNAME} 		Administrator
+${PASSWORD}     	Compaq123
+${CMD_NOTEPAD}		cmd.exe /c dir >> C:\\output1.txt
+
+*** Test Cases ***
+Test Execute Command
+	Open Connection    ${HOSTNAME1}    ${USERNAME}    ${PASSWORD}
+	${log} =    Execute Command And Return Output       cmd.exe /c dir

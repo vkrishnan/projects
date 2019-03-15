@@ -1,0 +1,153 @@
+*** Settings ***
+Documentation   Guided SPP Install for Linux
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> lin_guided.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH   | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE    | Optional | Virtual, DVD, USB; default _Virtual_ |
+...             = Prerequisites =
+...             Chrome must be installed and webdriver for chrome must be available in system path
+
+Library     OperatingSystem
+Library     SppLibrary
+Library     SSHLibrary
+Variables   SppLibrary/config/variables.py
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+
+Suite Setup         Close All Connections
+Suite Teardown      Close All Connections
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}             localhost
+${URL}                          https://{{SYSTEM_IP}}:63002
+${SEARCH_HPSUM_SERVICE_CMD}     ps aux | grep 'sum_service' | awk 'NR == 1' | awk '{print $2}'
+
+
+*** Test Cases ***
+Install SPP (Guided) on Linux
+    [Documentation]     Guided HPSUM installation with no options
+    [Tags]              SPP Install
+
+    #Create log directories and establish connection to server and mount SPP
+    Initialze Test Case Variables
+    Unix Server Setup
+
+    #Detect HPSUM version
+    Get HPSUM Version
+
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+
+    #Run deploy preview 1st time
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      First_Run
+    Parse Deploy Preview Report     First_Run
+
+    Clean Logs Server
+
+    #Run guided installation 1st time
+    ${hpsum_pid} =              Start HPSUM Service
+    ${FIRST_INSTALL_STATUS} =   Run Keyword And Return Status
+    ...                         Start Guided Interactive Installation                       First_Run
+    Copy HPSUM Logs Analyze And Get Gatherlogs      First_Run
+    Run Keyword IF              '${FIRST_INSTALL_STATUS}'=='False'                          Run Keywords
+    ...                         Log                 First run guided installation failed    Error   AND
+    ...                         Fail                First run guided installation failed
+
+    #Reboot server
+    Reboot The Server   First_Run
+
+    Run Keyword And Ignore Error                        OperatingSystem.Move File
+    ...     ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}     ${RG_LOG_PATH}/first_run_${HPSUM_DETAILS_LOG_XML}
+
+    #Re-establish connections
+    Open Connection SSH     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Mount SPP Image
+
+    #Run deploy preview 2nd time
+    Deploy Preview Report   ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      Second_Run
+
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+
+    #Run guided installation 2nd time
+    ${hpsum_pid} =              Start HPSUM Service
+    ${SECOND_INSTALL_STATUS}=   Run Keyword And Return Status
+    ...                         Start Guided Interactive Installation                       Second_Run
+    Copy HPSUM Logs Analyze And Get Gatherlogs      Second_Run
+    Run Keyword IF              '${SECOND_INSTALL_STATUS}'=='False'                         Run Keywords
+    ...                         Log                 Second run guided installation failed   Error   AND
+    ...                         Fail                Second run guided installation failed
+
+    #Reboot server
+    Reboot The Server   Second_Run
+
+    Unix Server Setup
+    Mount SPP Image
+
+    Move Log Files To Temp Directory
+
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+
+    #Run deploy preview 3rd time
+    SSHLibrary.Start Command        rm -rf ${LOGS_LINUX}/${DEPLOY_PREVIEW_REPORT}*
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      Third_Run
+    Parse Deploy Preview Report     Third_Run
+
+    [Teardown]      Run Keywords
+    ...             Run Keyword And Ignore Error            SppLibrary.Close Browser
+    ...             AND     Run Keyword And Ignore Error    Kill Process Name   ${HPSUM_SERVICE_NAME}
+    ...             AND     Move Log Files To Temp Directory
+    ...             AND     UnixLibrary.Testcase Cleanup
+
+
+*** Keywords ***
+Start HPSUM Service
+    [Documentation]             Start HPSUM Service on SUT
+    ${mount_point} =            UnixLibrary.Get SPP Mount Point
+    ${hpsum_dir} =              Catenate                        SEPARATOR=      ${mount_point}      ${HPSUM_DIR_LINUX}
+    Write                       cd ${hpsum_dir}
+    Set Client Configuration    600 seconds                     prompt=#
+    ${output} =                 Read Until Prompt
+    Write                       ${hpsum_dir}/${COMMAND_HPSUM_START_LINUX}
+    ${output} =                 Read Until                      SUM engine is now running
+    Log                         ${output}
+    ${hpsum_service_pid} =      SSHLibrary.Execute Command      ${SEARCH_HPSUM_SERVICE_CMD}
+    Sleep                       30
+    [Return]                    ${hpsum_service_pid}
+
+Copy HPSUM Logs Analyze And Get Gatherlogs              [Arguments]             ${RUN_COUNT}
+    [Documentation]                     Collects HPSUM install logs and analyze and run gatherlogs command
+    Collect HPSUM Logs                  @{HPSUM_LOG_FILES_LINUX}
+    Analyze HPSUM Log                   ${RUN_COUNT}
+    Open Connection SSH                 ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Execute Gatherlogs And Get Log      ${RUN_COUNT}
+
+Start Guided Interactive Installation   [Arguments]     ${RUN_COUNT}
+    [Documentation]                     Guided Install through selenium
+
+    ${MOUNT_DRIVE}=     Get SPP Mount Point
+    ${URL} =            Replace String      ${URL}      {{SYSTEM_IP}}   ${SYSTEM_IP}
+
+    ${STATUS} =     Start Interactive Installation      ${HPSUM_VERSION}    ${SYSTEM_USERNAME}
+    ...             ${SYSTEM_PASSWORD}                  ${RG_LOG_PATH}      ${RUN_COUNT}    ${URL}
+
+    Run Keyword If      '${STATUS}' != 'True'   Fail    Error in interacive installation
+
+    ${STATUS} =     Verify Review Page And Deploy   ${RG_LOG_PATH}      ${RUN_COUNT}
+
+    Run Keyword If      '${STATUS}' != 'True'   Fail    Error in components verify page
+
+Reboot The Server   [Arguments]             ${RUN_COUNT}
+                    #Reboot server and wait untill it starts up
+                    Ilo Set One Time Boot   hdd
+                    ${Reboot_status}=       SppLibrary.Reboot System        ${RUN_COUNT}                ${RG_LOG_PATH}
+                    SppLibrary.Close Browser
+                    Run Keyword If          'True' == '${Reboot_status}'    Wait Until Power Cycle      ${SYSTEM_IP}
+

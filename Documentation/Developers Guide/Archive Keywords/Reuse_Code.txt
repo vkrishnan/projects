@@ -1,0 +1,66 @@
+*** Settings ***
+Documentation       Previously Used Codes to archive
+
+*** Keywords ***
+Kill WSE Pop-up on Windows 2016
+    ${os_version} =     Get Operating System Name
+    Return From Keyword If                      '2016' not in '${os_version}'
+    : FOR               ${index}                IN RANGE                1   20
+    \                   ${WSE_PID} =            SppLibrary.get pid      EssentialsRoleConfigWizard
+    \                   Exit for loop if        ${WSE_PID} != None
+    Run Keyword if      ${WSE_PID} != None      Kill Process PID        ${WSE_PID}
+
+#Windows gatherlogs
+Execute Gatherlogs And Get Log
+    [Documentation]         Execute the gatherlogs command and copies the files to ${RG_LOG_PATH}
+    ${rg_root} =            Get RG Root
+    ${username} =           Get Username
+    ${temp_directory} =     Replace String          ${SYSTEM_TEMP_DIR_WINDOWS}                      {{USERNAME}}
+    ...                     ${username}
+    SppLibrary.Put File     ${rg_root}\\tools\\enter.txt
+    ...                     ${SUT_TEMP_DIR_WINDOWS}
+    ${mounted_drive} =      WinLibrary.Get SPP Mount Point
+    ${command} =            Construct Command       ${COMMAND_GATHERLOGS_WINDOWS}                   ${mounted_drive}
+    SppLibrary.Execute Command                      ${command}                  ${HPSUM_TIMEOUT}    ${mounted_drive}
+    Run Keyword If          '${SPP_MOUNT_TYPE}' == 'USB'                        SppLibrary.Get File
+    ...                     ${SUT_TEMP_DIR_WINDOWS}\\gathter_log_output.txt     ${RG_LOG_PATH}
+    : FOR                   ${index}                IN RANGE                    1                   20
+    \                       Sleep                   5s
+    \                       ${usb_log_location} =   Run Keyword If              '${SPP_MOUNT_TYPE}' == 'USB'
+    \                       ...                     Get Gatherlog Location
+    \                       ...                     ${RG_LOG_PATH}\\gathter_log_output.txt
+    \                       Run Keyword If          '${SPP_MOUNT_TYPE}' == 'USB'                    SppLibrary.Move File
+    \                       ...                     ${usb_log_location}
+    \                       ...                     ${temp_directory}
+    \                       Sleep                   5s
+    \                       SppLibrary.Get File     ${temp_directory}\\${GATHER_LOG_WINDOWS}
+    \                       ...                     ${RG_LOG_PATH}
+    \                       ${status}               ${ret} =                    Run Keyword And Ignore Error
+    \                       ...                     OperatingSystem.File Should Exist
+    \                       ...                     ${RG_LOG_PATH}\\${GATHER_LOG_WINDOWS}
+    \                       Exit For Loop If        '${status}' == 'PASS'
+
+#Linux gatherlogs
+Execute Gatherlogs And Get Log
+    [Documentation]     Execute the gatherlogs command and copies the files to ${RG_LOG_PATH}
+    ${mount_point} =    UnixLibrary.Get SPP Mount Point
+    ${hpsum_dir} =      Catenate                SEPARATOR=      ${mount_point}          ${HPSUM_DIR_LINUX}
+    Run Keyword If      '${SPP_MOUNT_TYPE}' == 'Virtual' or '${SPP_MOUNT_TYPE}' == 'DVD'    SSH Run Command
+    ...                 ${COMMAND_GATHERLOGS_LINUX}             ${hpsum_dir}            ${HPSUM_TIMEOUT}
+    Run Keyword If      '${SPP_MOUNT_TYPE}' == 'USB'            _Gather Log USB         ${hpsum_dir}
+    : FOR               ${index}                IN RANGE        1                       20
+    \                   Sleep                   5s
+    \                   SSHLibrary.Get File     ${SYSTEM_TEMP_DIR_LINUX}/${GATHER_LOG_LINUX}
+    \                   ...                     .\\
+    \                   OperatingSystem.Move Files              ${GATHER_LOG_LINUX}     ${RG_LOG_PATH}
+    \                   ${status}               ${ret} =        Run Keyword And Ignore Error
+    \                   ...                     OperatingSystem.File Should Exist
+    \                   ...                     ${RG_LOG_PATH}\\${GATHER_LOG_LINUX}
+    \                   Exit For Loop If        '${status}' == 'PASS'
+
+Check HPSUM Log     [Arguments]         ${filename}
+                    [Documentation]     Check if the file is present
+                    ${status} =         Run Keyword And Return Status   OperatingSystem.File Should Exist
+                    ...                 ${RG_LOG_PATH}\\${HPSUM_DETAILS_LOG_XML}
+                    Run Keyword If      'False' in '${status}'          Log     ${HPSUM_DETAILS_LOG_XML} not generated      WARN
+

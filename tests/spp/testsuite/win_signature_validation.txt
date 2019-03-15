@@ -1,0 +1,65 @@
+*** Settings ***
+Documentation   Windows signature validation using windows
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SIGNATURE_BYPASS:<Signature-bypass> -v SPP_MOUNT_TYPE:<Mount-Type> win_signature_validation.txt
+...             = Variables =
+...             | ILO_IP                | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME          | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD          | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP             | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME       | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD       | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH       | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SIGNATURE_BYPASS      | Optional | Bypass pop-up and install components if set to true; default _True_ |
+...             | SPP_MOUNT_TYPE        | Optional | Virtual, DVD, USB; default _Virtual_ |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+
+
+*** Test Cases ***
+Windows Signature Validation(Silent)
+    [Documentation]     Silent method for windows signature validation
+    [Tags]              SPP Install
+
+    # Setup ilo and wmi connections, install certificates, disable UAC and reboot
+    Setup Server
+
+    Get HPSUM Version
+
+    Clean Logs Server
+
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    First_Run
+    Parse Deploy Preview Report     First_Run
+
+    Clean Logs Server
+
+    Install AutoKeyClick
+
+    Execute HPSUM And Get Log   ${COMMAND_HPSUM_WINDOWS}    win_livelog.py
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+
+    Unmount And Reboot Server
+
+    Mount SPP Image
+
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    Second_Run
+    Parse Deploy Preview Report     Second_Run
+
+    ${status} =         Run Keyword And Return Status   OperatingSystem.File Should Exist
+    ...                 .\\${RG_LOG_PATH}\\${HPSUM_DETAILS_LOG_XML}
+    Run Keyword If      'True' != '${status}'           Fail    '${HPSUM_DETAILS_LOG_XML} not generated'
+
+    # Build Component List and Check for Signature
+    ${driver_details} =             Get Driver Details
+    Windows Signature Validation    ${driver_details}   ${RG_LOG_PATH}\\${HPSUM_DETAILS_LOG_XML}
+
+    [Teardown]      Testcase Cleanup
+

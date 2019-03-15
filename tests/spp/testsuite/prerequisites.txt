@@ -1,0 +1,22 @@
+*** Settings ***
+Documentation   Install SPP Prerequisites for Windows
+...             = Usage =
+...             pybot prerequisites.txt
+...             In case you have already ran prerequisites.txt from SPP repository
+...             then there is no need to run this file on same server.
+
+Library     SppLibrary
+
+
+*** Variables ***
+${PREREQUISITES_FILE}   tools\\install_prerequisites.bat
+
+
+*** Test Cases ***
+Install Prerequisites on RoboGalaxy Server
+    [Documentation]     Install Prerequisites on RoboGalaxy Server
+    [Tags]              RoboGalaxy Prerequisites Install
+    ${RG_ROOT} =        Get RG Root
+    Log                 ${RG_ROOT}
+    Install Prerequisites Batch     ${RG_ROOT}\\${PREREQUISITES_FILE}   ${RG_ROOT}
+

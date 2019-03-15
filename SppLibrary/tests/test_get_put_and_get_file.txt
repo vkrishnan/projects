@@ -1,0 +1,18 @@
+*** Settings ***
+Resource    SppLibrary/resource/WinRemote.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/config.py
+Library     SppLibrary
+
+*** Variables ***
+${HOSTNAME}    172.20.56.183
+${USERNAME}    Administrator
+${PASSWORD}    Compaq123
+
+*** Test Cases ***
+Test Put File
+	[Tags]	  file
+	Open Connection WMI    ${HOSTNAME}    ${USERNAME}    ${PASSWORD}
+	SppLibrary.Put File    dummy.txt    C:\\
+	#Open Connection    ${HOSTNAME}    ${USERNAME}    ${PASSWORD}
+	SppLibrary.Get File    C:\\dummy.txt    temp\\

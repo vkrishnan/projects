@@ -1,0 +1,111 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Linux
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> lin_auto.txt
+...             = Variables =
+...             | ILO_IP            | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME      | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD      | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP         | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME   | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD   | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH   | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE    | Optional | Virtual, DVD, USB; default _Virtual_ |
+
+Resource    SppLibrary/resource/UnixLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+Library     SppLibrary
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+
+
+*** Test Cases ***
+Install SPP (Silent) on Linux
+    [Documentation]     Silent HPSUM installation with no options
+    [Tags]              SPP Install
+
+    Initialze Test Case Variables
+
+    Unix Server Setup
+
+    Get HPSUM Version
+
+    Kill Process Name   ${HPSUM_SERVICE_NAME}
+
+    Clean Logs Server
+
+    # Collect & Parse Deploy Preview Report first time
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      First_Run
+    Parse Deploy Preview Report     First_Run
+    Clean Logs Server
+
+    # Execute HPSUM
+    Execute HPSUM And Get Log   ${COMMAND_HPSUM_LINUX}      lin_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    Analyze HPSUM Log
+    Run Keyword And Ignore Error                        OperatingSystem.Move File
+    ...     ${RG_LOG_PATH}/${HPSUM_DETAILS_LOG_XML}     ${RG_LOG_PATH}/first_run_${HPSUM_DETAILS_LOG_XML}
+
+    Execute Gatherlogs And Get Log      first run
+    TPM Check Module
+    First Dependency Check
+
+    Unmount And Reboot Server
+
+    Open Connection SSH     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Mount SPP Image
+
+    # Collect & Parse Deploy Preview Report second time
+    Deploy Preview Report   ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      Second_Run
+
+    # Execute HPSUM
+    Execute HPSUM And Get Log   ${COMMAND_HPSUM_LINUX}      lin_livelog.py
+    Analyze HPSUM Log
+
+    Execute Gatherlogs And Get Log      second run
+    Second Dependency Check And Move File
+
+    Unmount And Reboot Server
+
+    Open Connection SSH     ${SYSTEM_IP}    ${SYSTEM_USERNAME}      ${SYSTEM_PASSWORD}
+    Mount SPP Image
+
+    Move Log Files To Temp Directory
+
+    # Collect & Parse Deploy Preview Report third time
+    SSHLibrary.Start Command        rm -rf ${LOGS_LINUX}/${DEPLOY_PREVIEW_REPORT}*
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_LINUX}      Third_Run
+    Parse Deploy Preview Report     Third_Run
+
+    [Teardown]      Testcase Cleanup
+
+
+*** Keywords ***
+First Dependency Check
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      1
+    Return From Keyword If                          None == ${check}
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     WARN
+
+Second Dependency Check And Move File
+    ${dependency_dict} =    Check Dependency        ${RG_LOG_PATH}\\${HPSUM_LOG}
+    ${check} =              Get From Dictionary     ${dependency_dict}      3
+    Return From Keyword If                          None == ${check}
+    Run Keyword If          None != ${check}        Move Log Files To Temp Directory
+    ${components} =         Get Dictionary Keys     ${check}
+    ${len}                  Get Length              ${components}
+    :FOR                    ${index}                IN RANGE                0           ${len}
+    \                       ${services}             Get From Dictionary     ${check}    ${components[${index}]}
+    \                       Log                     Dependency in component:${components[${index}]} and Reason:${services}
+    \                       ...                     ERROR
+    Run Keyword If          None != ${check}        Fail                    Failed Due to dependency in component(s)
+

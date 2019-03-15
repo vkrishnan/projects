@@ -1,0 +1,53 @@
+Release Notes for SPP Automation
+--------------------------------
+
+Release 1.2         2017-02-27
+------------------------------
+- Win HPSUM8.0 Changes.
+- Win remote 8.0 changes.
+- HPSUM 8.0 Linux and Windwos piv remote VMware scripts.
+
+Release 1.1         2017-02-07
+------------------------------
+- Fix for 1001525475.
+- Fix for 1001519432.
+
+Release 1.0         2017-01-20
+------------------------------
+- Merged refactored code into production.
+- Enhancement for reboot and fixes.
+- Linux 8.0 Changes.
+- Dependency check fix.
+- Live Log 8.0 changes.
+- SPP Media Testing Test Case for Linux.
+- Reworked Lin Guided with python selenium
+- Documentation.
+
+Release 0.2         2016-05-27
+------------------------------
+- Partial Fix 1 For 1001476693 - Script will check if deploy report is copied or not. If after 2 minutes report is not generated, then script will show a warning.
+- Partial Fix 2 For 1001476693 - Script will check if deploy report is copied or not. If after 2 minutes report is not generated , then script will show a warning.
+- Fix For issue 1001467112 - Script will check server type and if its synergy then only specific steps will be executed.
+- Win Remote OA Test Case - Added new script which will do OA deployment from Windows host. 
+
+Release 0.1         2016-05-06
+------------------------------
+- Fixed issue in SPP prerequisite.txt, Changed RG root path to Dynamic from Static.
+- Fix for 1001476695 - Guided script will display run name also if there are no components to install.
+- Fix For 1001477800 - Script will check kill any running HPSUM instance before starting test execution.
+- Fix for 1001477819 - Added ams parameter in all CLI scripts.
+- Fix for 1001476687 - Added management parameters in win to win remote scripts.
+
+
+Beta 2         2014-11-20
+-------------------------
+- Fixed issue with identifying different mount point in different flavours of Linux.
+- Fixed an issue in windows script creating multiple instances of hpsum.bat.
+- Flushing the stdout after running all command to avoid issues with buffer.
+
+
+Beta 1         2014-11-17
+-------------------------
+- Original version.
+
+------------------------------------------------------------------------------------------------------------------------------------------

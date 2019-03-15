@@ -1,0 +1,67 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> -v SIGNATURE_BYPASS:<Signature-bypass> win_auto_rewrite.txt
+...             = Variables =
+...             | ILO_IP                | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME          | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD          | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP             | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME       | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD       | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH       | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE        | Optional | Virtual, DVD, USB; default _Virtual_ |
+...             | SIGNATURE_BYPASS      | Optional | Bypass pop-up and install components if set to true; default _True_ |
+
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+Library     SppLibrary
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+
+
+*** Test Cases ***
+Install SPP (Silent with Rewrite) on Windows
+    [Documentation]     Silent HPSUM installation with rewrite option
+    [Tags]              SPP Install
+
+    # Setup ilo and wmi connections, install certificates, disable UAC and reboot
+    Setup Server
+
+    Get HPSUM Version
+
+    Clean Logs Server
+
+    # Collect & Parse Deploy Preview Report first time
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    First_Run
+    Parse Deploy Preview Report     First_Run
+
+    Clean Logs Server
+
+    # Run AutoKeyClick.exe
+    Install AutoKeyClick
+
+    # Execute HPSUM
+    Execute HPSUM And Get Log   ${COMMAND_HPSUM_WINDOWS_REWRITE}    win_livelog.py
+
+    # Collect Logs and analyze HPSUM_Details.xml
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log
+
+    # Dependency check
+    Dependency Check
+
+    Unmount And Reboot Server
+    Mount SPP Image
+
+    Move Log Files To Temp Directory
+
+    # Collect & Parse Deploy Preview Report second time
+    Deploy Preview Report           ${COMMAND_DEPLOY_PREVIEW_REPORT_WINDOWS}    Second_Run
+    Parse Deploy Preview Report     Second_Run
+
+    [Teardown]      Testcase Cleanup
+

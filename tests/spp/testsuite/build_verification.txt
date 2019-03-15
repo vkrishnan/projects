@@ -1,0 +1,44 @@
+*** Settings ***
+Documentation   Build Verification
+...             = Usage =
+...             pybot -v IMAGE_SHARE_IP:<IMAGE-SHARE-IP> -v IMAGE_SHARE_USERNAME:<IMAGE-SHARE-USERNAME> -v IMAGE_SHARE_PASSWORD:<IMAGE-SHARE-PASSWORD> -v LEFT_IMAGE_PATH:<LEFT-IMAGE-PATH> -v RIGHT_IMAGE_PATH:<RIGHT-IMAGE-PATH> build_verification.txt
+...             = Variables =
+...             | LEFT_IMAGE_PATH       | Required | Image location of old build |
+...             | RIGHT_IMAGE_PATH      | Required | Image location of new build |
+...             = prerequisites =
+...             | WinCDEmu 4.1.exe      | Need to install this tool in RG server and have to set path |
+
+Variables   SppLibrary/config/variables.py
+Resource    SppLibrary/resource/spp_utility.robot
+Library     SppLibrary
+
+
+*** Test Cases ***
+Build Verification
+    [Documentation]                 Build Verification
+    [Tags]                          Verification
+    Initialze Test Case Variables
+    SppLibrary.Open Connection      ${IMAGE_SHARE_IP}   ${IMAGE_SHARE_USERNAME}     ${IMAGE_SHARE_PASSWORD}
+    ${Mount_Drive} =                Setup Test Case     ${LEFT_IMAGE_PATH}          ${RIGHT_IMAGE_PATH}
+    Build Verification by Iso       ${Mount_Drive}      ${RG_LOG_PATH}
+
+    [TearDown]      Run Keywords    Run Keyword And Ignore Error    Move Files      same_file.txt   left_file.txt
+    ...             right_file.txt
+    ...             differnet_file.txt
+    ...             report.txt
+    ...             ${RG_LOG_PATH}
+    ...             AND             Run Keyword And Ignore Error    Unmount Image   ${Mount_Drive}
+    ...             AND             Run Keyword And Ignore Error    Disconnect From Share Path
+
+
+*** Keywords ***
+Setup Test Case     [Arguments]         ${LEFT_IMAGE_PATH}      ${RIGHT_IMAGE_PATH}
+                    Connect to share Path
+                    Mount Image         "${LEFT_IMAGE_PATH}"    "${RIGHT_IMAGE_PATH}"
+                    ${Mount_Drive} =    Get Build Mount Point   ${LEFT_IMAGE_PATH}      ${RIGHT_IMAGE_PATH}
+                    [Return]            ${Mount_Drive}
+
+Build Verification by Iso   [Arguments]         ${Mount_Drive}      ${RG_LOG_PATH}
+    Check Files             ${Mount_Drive}
+    Generate Report         ${Mount_Drive}      ${RG_LOG_PATH}
+

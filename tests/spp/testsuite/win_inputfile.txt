@@ -1,0 +1,290 @@
+*** Settings ***
+Documentation   Automatic SPP Install for Windows Using Input File Parameters
+...             = Usage =
+...             pybot -v ILO_IP:<iLO-IP> -v ILO_USERNAME:<iLO-Username> -v ILO_PASSWORD:<iLO-Password> -v SYSTEM_IP:<System-IP> -v SYSTEM_USERNAME:<System-Username> -v SYSTEM_PASSWORD:<System-Password> -v HTTP_IMAGE_PATH:<SPP-Image-Location> -v SPP_MOUNT_TYPE:<Mount-Type> -v SIGNATURE_BYPASS:<Signature-bypass> win_inputfile.txt
+...             = Variables =
+...             | ILO_IP                | Required | iLO IP address of the SUT |
+...             | ILO_USERNAME          | Optional | iLO username of the SUT; default _Administrator_ |
+...             | ILO_PASSWORD          | Optional | iLO password of the SUT; default _Compaq123_ |
+...             | SYSTEM_IP             | Required | System IP address of the SUT |
+...             | SYSTEM_USERNAME       | Optional | System username of the SUT; default _Administrator_ |
+...             | SYSTEM_PASSWORD       | Optional | System password of the SUT; default _Compaq123_ |
+...             | HTTP_IMAGE_PATH       | Required | Image location of the SPP source media (must be in HTTP format) |
+...             | SPP_MOUNT_TYPE        | Optional | Virtual, CDDVDW, USB; default _Virtual_ |
+...             | SIGNATURE_BYPASS      | Optional | Bypass pop-up and install components if set to true; default _True_ |
+
+Library     SppLibrary
+Resource    SppLibrary/resource/WinLibrary.robot
+Resource    SppLibrary/resource/spp_utility.robot
+Variables   SppLibrary/config/variables.py
+
+
+*** Variables ***
+${SUT_LOG_LOCATION}     localhost
+${REPORT_DIR}           C:\\reports
+${LOG_NAME}             C:\\USERDIR
+@{reports}              Inventory_Report    FailedDependency_Report
+                        ...                 Combined_Report
+                        ...                 deploy_preview_Report   Firmware_Report     Installed_Report
+
+
+*** Test Cases ***
+Input File
+    [Documentation]     Silent HPSUM installation with input file parameters
+    [Tags]              SPP Install
+
+    Setup Server
+
+    Get HPSUM Version
+
+    # Putting current system username and password in all the input files & copy to SUT
+    ${dict} =       Create Dictionary
+    ...             {{ SYSTEM_USERNAME }} = ${SYSTEM_USERNAME}
+    ...             {{ SYSTEM_PASSWORD }} = ${SYSTEM_PASSWORD}
+    @{DIR_LIST} =   OperatingSystem.List Files In Directory     C:\\dev\\spp\\tools\\input_files
+    ${length}       Get Length                  ${DIR_LIST}
+    :For            ${var}                      IN              @{DIR_LIST}
+    \               ${temp_file} =              Replace String In File
+    \               ...                         C:\\dev\\spp\\tools\\input_files\\${var}    ${dict}
+    \               Log                         ${temp_file}
+    \               SppLibrary.Put File         ${temp_file}    ${SUT_TEMP_DIR_WINDOWS}
+    \               OperatingSystem.Move File   ${temp_file}    ${RG_LOG_PATH}
+
+    [Teardown]      Run keyword if test failed      Fatal Error     "Unable to copy input files"
+
+HPSUM Software Only with ForceBundle
+    [Documentation]             Silent HPSUM installation with force bundle software only with no mgmt options
+    [Tags]                      Force Bundle Software only
+    Initialze Test Case Input File
+    Kill Process Name           ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\software_only_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  software only with forcebundle
+    Unmount And Reboot Server
+
+HPSUM Force Software
+    [Documentation]             Silent HPSUM installation with force software with WMI and SNMP
+    [Tags]                      Force Software
+    Initialze Test Case Input File
+    Mount SPP Image
+    Kill Process Name           ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\forcesoftware_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  force software
+
+HPSUM Downgrade
+    [Documentation]             Silent HPSUM installation with downgrade options
+    [Tags]                      Downgrade
+    Initialze Test Case Input File
+    Mount SPP Image
+    Kill Process Name           ${HPSUM_SERVICE_NAME}
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\downgrade_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  downgrade
+    Unmount And Reboot Server
+
+HPSUM Rom Only
+    [Documentation]             Silent HPSUM installation with romonly options
+    [Tags]                      Romonly
+    Initialze Test Case Input File
+    Mount SPP Image
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\romonly_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  rom only
+    Unmount And Reboot Server
+
+HPSUM Force Rom with AMS
+    [Documentation]             Silent HPSUM installation with force rom with ams options
+    [Tags]                      Force ROM with AMS
+    Initialze Test Case Input File
+    Mount SPP Image
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\forcerom_ams_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  force rom with ams
+    ${ILO_COMP}                 Get iLO Component Filename          ${RG_LOG_PATH}\\${HPSUM_LOG}
+    Set Global Variable         ${ILO_COMP}
+    Unmount And Reboot Server
+
+HPSUM Force All
+    [Documentation]         Silent HPSUM installation with force all option
+    [Tags]                  Force All
+    Initialze Test Case Input File
+    Mount SPP Image
+    Clean Logs Server
+    ${mounted_drive} =      WinLibrary.Get SPP Mount Point
+    ${command}=             Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}                         ${mounted_drive}
+    ...                     ${SUT_TEMP_DIR_WINDOWS}\\forceall_temp.txt
+    Ilo Set One Time Boot   HDD
+    Run Keyword If          '${SIGNATURE_BYPASS}' == 'False'                SppLibrary.Execute Command      ${command}
+    ...                     ${HPSUM_TIMEOUT}
+    ...                     ELSE                Execute Command Psexec      ${command}                      ${HPSUM_TIMEOUT}
+    Sleep                   10s
+    Run Keyword And Continue On Failure         Wait Until Power Cycle      ${SYSTEM_IP}
+    WinLibrary.Collect HPSUM Logs               @{HPSUM_LOG_FILES_WINDOWS}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log              force all
+
+HPSUM Rewrite
+    [Documentation]             Silent HPSUM installation with rewrite option
+    [Tags]                      Rewrite
+    Initialze Test Case Input File
+    Mount SPP Image
+    Clean Logs Server
+    ${command}=                 Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                  ${SUT_TEMP_DIR_WINDOWS}\\rewrite_temp.txt
+    Execute HPSUM And Get Log   ${command}          win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                    Move Files      @{TEMP_TEST_CASE_LOGS}      ${RG_LOG_PATH}
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                  rewrite
+    Unmount And Reboot Server
+
+HPSUM Reports
+    [Documentation]     Silent HPSUM Reports check
+    [Tags]              Reports
+    Initialze Test Case Input File
+
+    #Putting Report Dir path in reports input file & copy to SUT
+    ${dict} =                   Create Dictionary
+    ...                         {{ REPORT_DIR }} = ${REPORT_DIR}
+    ...                         {{ SYSTEM_USERNAME }} = ${SYSTEM_USERNAME}
+    ...                         {{ SYSTEM_PASSWORD }} = ${SYSTEM_PASSWORD}
+    ${temp_file} =              Replace String In File
+    ...                         C:\\dev\\spp\\tools\\input_files\\reports.txt   ${dict}
+    Log                         ${temp_file}
+    SppLibrary.Put File         ${temp_file}    ${SUT_TEMP_DIR_WINDOWS}
+    OperatingSystem.Move File   ${temp_file}    ${RG_LOG_PATH}
+
+    Mount SPP Image
+    Clean Logs Server
+    ${command}=                 Construct Command       ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}
+    ...                         %s                      ${SUT_TEMP_DIR_WINDOWS}\\reports_temp.txt
+    Execute HPSUM And Get Log   ${command}              win_livelog.py
+    Sleep                       10s
+    Run Keyword And Ignore Error                        Move Files      @{TEMP_TEST_CASE_LOGS}              ${RG_LOG_PATH}
+    ${status} =                 Run Keyword And Return Status           SppLibrary.Folder Should Exist      ${REPORT_DIR}
+    Run Keyword If              '${status}' == 'False'                  Log
+    ...                         "Report Dir parameter not working"
+    ...                         WARN
+    Run Keyword If              '${status}' == 'True'   Get Hpsum Reports
+    Unmount And Reboot Server
+
+# BELOW CODE IS COMMENTED AS componentslist PARAMETER HAS SOME ISSUES. WILL UNCOMMENT ONCE THE ISSUE IS FIXED
+#HPSUM Component List
+    #[Documentation]    Silent HPSUM installation with components list option
+    #[Tags]             Component List
+    #Initialze Test Case Input File
+
+    # Putting ilo component name, system username and password in componentslist input file & copy to SUT
+    #${dict} =                  Create Dictionary
+    #...                        {{ ILO_COMP }} = ${ILO_COMP}
+    #...                        {{ SYSTEM_USERNAME }} = ${SYSTEM_USERNAME}
+    #...                        {{ SYSTEM_PASSWORD }} = ${SYSTEM_PASSWORD}
+    #${temp_file} =             Replace String In File
+    #...                        C:\\dev\\spp\\tools\\input_files\\componentslist.txt    ${dict}
+    #Log                        ${temp_file}
+    #SppLibrary.Put File        ${temp_file}        ${SUT_TEMP_DIR_WINDOWS}
+    #OperatingSystem.Move File                      ${temp_file}                        ${RG_LOG_PATH}
+    #Mount SPP Image
+    #Clean Logs Server
+    #${mounted_drive} =         WinLibrary.Get SPP Mount Point
+    #${command}=                Construct Command   ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}     ${mounted_drive}
+    #...                        ${SUT_TEMP_DIR_WINDOWS}\\componentslist_temp.txt
+    #Execute Command Psexec     ${command}          ${HPSUM_TIMEOUT}
+    #Sleep                      10s
+    #WinLibrary.Collect HPSUM Logs                  @{HPSUM_LOG_FILES_WINDOWS}
+    #Analyze HPSUM Log
+    #Execute Gatherlogs And Get Log                 component list
+
+HPSUM DryRun with Reboot
+    [Documentation]     Silent HPSUM installation with dry run and reboot message option
+    [Tags]              Dry Run with Reboot
+    Initialze Test Case Input File
+
+    #Putting Log Location path in reports input file & copy to SUT
+    ${dict} =                   Create Dictionary
+    ...                         {{ LOG_NAME }} = ${LOG_NAME}
+    ...                         {{ SYSTEM_USERNAME }} = ${SYSTEM_USERNAME}
+    ...                         {{ SYSTEM_PASSWORD }} = ${SYSTEM_PASSWORD}
+    ${temp_file} =              Replace String In File
+    ...                         C:\\dev\\spp\\tools\\input_files\\dryrun_reboot.txt     ${dict}
+    Log                         ${temp_file}
+    SppLibrary.Put File         ${temp_file}    ${SUT_TEMP_DIR_WINDOWS}
+    OperatingSystem.Move File   ${temp_file}    ${RG_LOG_PATH}
+
+    Mount SPP Image
+    Clean Logs Server
+    ${mounted_drive} =          WinLibrary.Get SPP Mount Point
+    ${command}=                 Construct Command           ${COMMAND_HPSUM_INPUT_FILE_WINDOWS}     ${mounted_drive}
+    ...                         ${SUT_TEMP_DIR_WINDOWS}\\dryrun_reboot_temp.txt
+    Ilo Set One Time Boot       HDD
+    Execute Command Psexec      ${command}                  ${HPSUM_TIMEOUT}
+    Sleep                       10s
+    Wait Until Power Cycle      ${SYSTEM_IP}
+    ${status} =                 Run Keyword And Return Status                       SppLibrary.Folder Should Exist
+    ...                         C:\\HPSUM_logs
+    Run Keyword If              '${status}' == 'False'      Log                     "LogFileName parameter not working"
+    ...                         WARN
+    Run Keyword If              '${status}' == 'True'       WinLibrary.Collect HPSUM Logs
+    ...                         @{LOG_FILES_USERDIR_WINDOWS}
+    ${status2} =                Run Keyword And Return Status                       SppLibrary.File Should Exist
+    ...                         ${SUT_TEMP_DIR_WINDOWS}\\dryrun_reboot_temp.txt
+    Run Keyword If              '${status2}' == 'True'      Log                     "DeleteInputFile parameter not working"
+    ...                         WARN
+    Analyze HPSUM Log
+    Execute Gatherlogs And Get Log                          dryrun with reboot
+    ${event_logs} =             Get Event Logs              System                  Information
+    Run Keyword And Continue On Failure                     Generate Event Logs     System          ${event_logs}
+    ...                         ${RG_LOG_PATH}
+    ${message_check}            Reboot Message Check        ${RG_LOG_PATH}\\System.html
+    Run Keyword If              ${message_check} == 0       Log                     "RebootMessage parameter not working"
+    ...                         WARN
+
+    [Teardown]      Testcase Cleanup
+
+
+*** Keywords ***
+Initialze Test Case Input File
+    OperatingSystem.Create Directory    ${RG_LOG_PATH}/${TEST NAME}
+    OperatingSystem.Directory Should Exist                  ${RG_LOG_PATH}/${TEST NAME}
+    ${RG_LOG_PATH} =                    Normalize Path      ${RG_LOG_PATH}/${TEST NAME}
+    Set Test Variable                   ${RG_LOG_PATH}
+
+Get Hpsum Reports
+    :FOR    ${var}                  IN      @{reports}
+    \       Sleep                   3s
+    \       SppLibrary.Get File     ${REPORT_DIR}\\${HPSUM_NAME}_${var}*\\*.html    .\\
+    \       Run Keyword And Ignore Error    OperatingSystem.Move File               .\\${HPSUM_NAME}_${var}_*.html
+    \       ...                     ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Sleep                   3s
+    \       ${status} =             Run Keyword And Return Status
+    \       ...                     OperatingSystem.File Should Exist
+    \       ...                     ${RG_LOG_PATH}\\${HPSUM_NAME}_${var}.html
+    \       Run Keyword If          '${status}' == 'False'
+    \       ...                     LOG     ${HPSUM_NAME}_${var} Not Found          WARN
+
